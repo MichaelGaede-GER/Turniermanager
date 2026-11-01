@@ -2650,6 +2650,22 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
           </div>
         </div>
 
+        <div class="card" style="margin-top:16px">
+          <div class="card-header"><h3>Verbands-Zusatzmails (Bestätigung durch Nationalverband)</h3>
+            <button class="btn" style="font-size:11px;padding:4px 10px" onclick="addFederationRule()">+ Regel hinzufügen</button>
+            <button class="btn primary" style="font-size:11px;padding:4px 10px" onclick="saveFederationRules()">💾 Speichern</button>
+          </div>
+          <div class="card-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:10px">Wird beim Versand der <strong>Bestätigungs-E-Mail</strong> (📧 in der Teilnehmerliste) erkannt, dass der Teilnehmer aus einem der hier hinterlegten Länder kommt, wird zusätzlich zur normalen Bestätigung eine <strong>zweite E-Mail an den Teilnehmer und den Verband</strong> geschickt (z.B. Pakistan → Pakistan Squash Federation).</p>
+            <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Platzhalter für Betreff/Text: <code>{name}</code> <code>{firstname}</code> <code>{lastname}</code> <code>{event}</code> <code>{country}</code> <code>{dob}</code> <code>{category}</code> <code>{esid}</code> <code>{email}</code> <code>{club}</code> <code>{federation}</code></p>
+            <div class="form-group" style="max-width:360px;margin-bottom:14px">
+              <label>EmailJS-Vorlage für Zusatzmails (Template-ID, max. 24 Zeichen)</label>
+              <input type="text" id="federationTplId" maxlength="24" placeholder="template_federation" />
+            </div>
+            <div id="federationRulesList"><span style="color:var(--text3);font-size:13px">Lade…</span></div>
+          </div>
+        </div>
+
         <div style="margin:22px 0 10px;font-size:13px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;gap:10px">
           <span>🏨 Hotel</span><div style="flex:1;height:1px;background:var(--border)"></div>
         </div>
@@ -6442,6 +6458,17 @@ async function sendParticipantConfirmation(id) {
 
   if (!confirm('Bestätigungs-/Verwaltungs-E-Mail an ' + p.firstname + ' ' + p.lastname + ' (' + p.email + ') senden?\n\nDie Mail enthält den Bearbeiten-, Bestätigungs- und Rückzugs-Link.')) return;
 
+  // Land mit Verbands-Bestätigungspflicht? (Einstellungen → Verbands-Zusatzmails)
+  await _loadFederationRules();
+  var fedRules = _matchFederationRules(p.country);
+  var sendFed = false;
+  if (fedRules.length) {
+    var fedInfo = fedRules.map(function (fr) { return '• ' + (fr.federation_name || fr.countries) + ' → ' + _fedRecipients(fr, p).join(', '); }).join('\n');
+    sendFed = confirm('🏳 ' + p.firstname + ' ' + p.lastname + ' kommt aus ' + (p.country || '?') + ' – hier ist die Bestätigung durch den Nationalverband nötig.\n\n'
+      + 'Zusätzlich zur normalen Bestätigung wird diese Zusatzmail gesendet:\n' + fedInfo
+      + '\n\nOK = Zusatzmail mitsenden · Abbrechen = nur normale Bestätigung');
+  }
+
   // Fehlende Tokens (z.B. bei manueller Erfassung) jetzt erzeugen und speichern.
   var patch = {};
   if (!p.edit_token)     patch.edit_token     = _adminRandomToken();
@@ -6545,7 +6572,208 @@ async function sendParticipantConfirmation(id) {
     } catch (e2) { console.warn('confirm_mail_sent_at:', e2); }
   } catch (e) {
     toast('❌ Versand fehlgeschlagen: ' + (e && (e.text || e.message) || e));
+    return;
   }
+
+  // Zusatzmail(s) an Teilnehmer + Nationalverband (Einstellungen → Verbands-Zusatzmails)
+  if (fedRules.length && sendFed) {
+    for (var fi = 0; fi < fedRules.length; fi++) {
+      await _sendFederationMail(fedRules[fi], p, evName);
+    }
+  }
+}
+
+// ==== VERBANDS-ZUSATZMAILS ====
+// Regeln in app_settings 'federation_mail_rules' (JSON-Array), Template-ID in 'federation_mail_tpl'.
+// Regel: { active, countries: 'PAK, Pakistan', federation_name, federation_email: 'a@x.pk, b@y.pk',
+//          include_participant, subject, body }
+var FEDERATION_TPL_DEFAULT = 'template_federation';
+var FEDERATION_RULE_DEFAULT = {
+  active: true,
+  countries: 'PAK',
+  federation_name: 'Pakistan Squash Federation',
+  federation_email: '',
+  include_participant: true,
+  subject: 'Endorsement request: {name} – {event}',
+  body: 'Dear {federation},\n\n{name} (date of birth: {dob}, ESID: {esid}) has registered for {event} in the category {category}.\n\n'
+    + 'According to the tournament regulations, players from {country} require the confirmation (endorsement) of their national federation before their entry can be accepted.\n\n'
+    + 'We kindly ask you to confirm the participation of {name} by replying to this email.\n\n'
+    + 'Dear {firstname}, this email has also been sent to you for your information. Your entry will only be confirmed once we have received the endorsement of your federation.\n\n'
+    + 'Kind regards\nTournament Organisation'
+};
+var _federationRules = null;
+var _federationTplId = FEDERATION_TPL_DEFAULT;
+
+async function _loadFederationRules() {
+  try {
+    var r = await db.from('app_settings').select('key,value').in('key', ['federation_mail_rules', 'federation_mail_tpl']);
+    _federationRules = [];
+    (r.data || []).forEach(function (row) {
+      if (row.key === 'federation_mail_rules') { try { var a = JSON.parse(row.value); if (Array.isArray(a)) _federationRules = a; } catch (e) {} }
+      if (row.key === 'federation_mail_tpl' && row.value) _federationTplId = String(row.value).trim() || FEDERATION_TPL_DEFAULT;
+    });
+  } catch (e) { _federationRules = _federationRules || []; }
+  return _federationRules;
+}
+
+function _fedNorm(s) { return String(s || '').trim().toUpperCase(); }
+
+// Liefert alle aktiven Regeln, deren Länderliste zum Land des Teilnehmers passt.
+// Verglichen wird mit dem Ländercode (z.B. PAK) UND dem ausgeschriebenen Namen (z.B. Pakistan).
+function _matchFederationRules(country) {
+  var c = _fedNorm(country);
+  if (!c) return [];
+  var cName = (typeof COUNTRY_NAMES !== 'undefined' && COUNTRY_NAMES[c]) ? _fedNorm(COUNTRY_NAMES[c]) : '';
+  return (_federationRules || []).filter(function (rule) {
+    if (!rule || rule.active === false || !rule.federation_email) return false;
+    var list = String(rule.countries || '').split(/[,;]/).map(_fedNorm).filter(Boolean);
+    return list.some(function (x) {
+      var xName = (typeof COUNTRY_NAMES !== 'undefined' && COUNTRY_NAMES[x]) ? _fedNorm(COUNTRY_NAMES[x]) : '';
+      return x === c || (cName && x === cName) || (xName && xName === c);
+    });
+  });
+}
+
+function _fedFill(text, p, evName, rule) {
+  var cc = _fedNorm(p.country);
+  var countryName = (typeof COUNTRY_NAMES !== 'undefined' && COUNTRY_NAMES[cc]) ? COUNTRY_NAMES[cc] : (p.country || '');
+  var map = {
+    name: ((p.firstname || '') + ' ' + (p.lastname || '')).trim(),
+    firstname: p.firstname || '', lastname: p.lastname || '',
+    event: evName || 'the tournament', country: countryName,
+    dob: p.dob || '-', category: p.events || '-', esid: p.member_id || '-',
+    email: p.email || '', club: p.verein || '-',
+    federation: (rule && rule.federation_name) || 'National Federation'
+  };
+  return String(text || '').replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : m; });
+}
+
+function _fedRecipients(rule, p) {
+  var list = String(rule.federation_email || '').split(/[,;\s]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+  if (rule.include_participant !== false && p.email) list.unshift(p.email.trim());
+  var seen = {};
+  return list.filter(function (m) { var k = m.toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; });
+}
+
+async function _sendFederationMail(rule, p, evName) {
+  var to = _fedRecipients(rule, p);
+  if (!to.length) return false;
+  var subject = _fedFill(rule.subject || FEDERATION_RULE_DEFAULT.subject, p, evName, rule);
+  var body = _fedFill(rule.body || FEDERATION_RULE_DEFAULT.body, p, evName, rule);
+  try {
+    await emailjs.send(ADMIN_EMAILJS_SERVICE_ID, _federationTplId || FEDERATION_TPL_DEFAULT, {
+      to_email: to.join(','),
+      to_name: rule.federation_name || '',
+      federation_name: rule.federation_name || '',
+      participant_name: ((p.firstname || '') + ' ' + (p.lastname || '')).trim(),
+      participant_email: p.email || '',
+      reply_to: p.email || '',
+      event_name: evName || '',
+      subject: subject,
+      message: body
+    });
+    toast('📧 Verbands-Mail (' + (rule.federation_name || rule.countries) + ') an ' + to.join(', ') + ' gesendet');
+    return true;
+  } catch (e) {
+    var err = (e && (e.text || e.message)) || String(e);
+    if (confirm('❌ Die Verbands-Mail an ' + (rule.federation_name || rule.countries) + ' konnte nicht über EmailJS gesendet werden:\n' + err
+      + '\n\n(Ist die EmailJS-Vorlage „' + (_federationTplId || FEDERATION_TPL_DEFAULT) + '“ angelegt?)\n\nStattdessen im E-Mail-Programm öffnen?')) {
+      window.location.href = 'mailto:' + to.map(encodeURIComponent).join(',') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    }
+    return false;
+  }
+}
+
+// ---- Einstellungen-UI ----
+async function loadFederationRulesSettings() {
+  await _loadFederationRules();
+  var inp = document.getElementById('federationTplId');
+  if (inp) inp.value = _federationTplId || FEDERATION_TPL_DEFAULT;
+  renderFederationRules();
+}
+
+function _collectFederationRulesFromUi() {
+  var box = document.getElementById('federationRulesList');
+  if (!box) return _federationRules || [];
+  var out = [];
+  box.querySelectorAll('[data-fed-idx]').forEach(function (card) {
+    function f(n) { var el = card.querySelector('[data-f="' + n + '"]'); return el ? (el.type === 'checkbox' ? el.checked : el.value) : ''; }
+    out.push({
+      active: !!f('active'),
+      countries: String(f('countries')).trim(),
+      federation_name: String(f('federation_name')).trim(),
+      federation_email: String(f('federation_email')).trim(),
+      include_participant: !!f('include_participant'),
+      subject: f('subject'),
+      body: f('body')
+    });
+  });
+  return out;
+}
+
+function renderFederationRules() {
+  var box = document.getElementById('federationRulesList');
+  if (!box) return;
+  var rules = _federationRules || [];
+  if (!rules.length) {
+    box.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:8px 0">Noch keine Regel angelegt. Mit „+ Regel hinzufügen“ z.B. Pakistan anlegen.</div>';
+    return;
+  }
+  var inputStyle = 'width:100%;font-size:13px';
+  box.innerHTML = rules.map(function (r, i) {
+    return '<div data-fed-idx="' + i + '" style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px;background:var(--bg2)">'
+      + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">'
+      +   '<label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600"><input type="checkbox" data-f="active"' + (r.active !== false ? ' checked' : '') + '> Aktiv</label>'
+      +   '<span style="font-size:13px;font-weight:700;color:var(--blue)">' + esc(r.federation_name || r.countries || 'Neue Regel') + '</span>'
+      +   '<div style="flex:1"></div>'
+      +   '<button class="btn" style="font-size:11px;padding:3px 8px;color:var(--red)" onclick="removeFederationRule(' + i + ')">🗑 Entfernen</button>'
+      + '</div>'
+      + '<div class="form-grid">'
+      +   '<div class="form-group"><label>Länder (Code oder Name, mehrere mit Komma)</label><input type="text" data-f="countries" style="' + inputStyle + '" placeholder="PAK" value="' + esc(r.countries) + '"></div>'
+      +   '<div class="form-group"><label>Verband (Name)</label><input type="text" data-f="federation_name" style="' + inputStyle + '" placeholder="Pakistan Squash Federation" value="' + esc(r.federation_name) + '"></div>'
+      +   '<div class="form-group" style="grid-column:1/-1"><label>E-Mail(s) des Verbands (mehrere mit Komma)</label><input type="text" data-f="federation_email" style="' + inputStyle + '" placeholder="info@verband.org" value="' + esc(r.federation_email) + '"></div>'
+      +   '<div class="form-group" style="grid-column:1/-1"><label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-f="include_participant"' + (r.include_participant !== false ? ' checked' : '') + '> Teilnehmer erhält diese Zusatzmail ebenfalls (gemeinsame Mail an Teilnehmer + Verband)</label></div>'
+      +   '<div class="form-group" style="grid-column:1/-1"><label>Betreff</label><input type="text" data-f="subject" style="' + inputStyle + '" value="' + esc(r.subject) + '"></div>'
+      +   '<div class="form-group" style="grid-column:1/-1"><label>Text</label><textarea data-f="body" rows="9" style="' + inputStyle + ';font-family:inherit">' + esc(r.body) + '</textarea></div>'
+      + '</div></div>';
+  }).join('');
+}
+
+function addFederationRule() {
+  _federationRules = _collectFederationRulesFromUi();
+  var rule = JSON.parse(JSON.stringify(FEDERATION_RULE_DEFAULT));
+  if (_federationRules.length) { rule.countries = ''; rule.federation_name = ''; }
+  _federationRules.push(rule);
+  renderFederationRules();
+}
+
+function removeFederationRule(i) {
+  _federationRules = _collectFederationRulesFromUi();
+  var r = _federationRules[i];
+  if (!confirm('Regel „' + ((r && (r.federation_name || r.countries)) || 'ohne Namen') + '“ entfernen? (Wird erst mit 💾 Speichern endgültig übernommen.)')) return;
+  _federationRules.splice(i, 1);
+  renderFederationRules();
+}
+
+async function saveFederationRules() {
+  var rules = _collectFederationRulesFromUi();
+  for (var i = 0; i < rules.length; i++) {
+    if (rules[i].active && (!rules[i].countries || !rules[i].federation_email)) {
+      toast('⚠ Regel ' + (i + 1) + ': Länder und Verbands-E-Mail sind Pflicht (oder Regel deaktivieren).');
+      return;
+    }
+  }
+  var tpl = (document.getElementById('federationTplId') && document.getElementById('federationTplId').value.trim()) || FEDERATION_TPL_DEFAULT;
+  if (tpl.length > 24) { toast('⚠ EmailJS-Template-ID darf max. 24 Zeichen haben.'); return; }
+  await db.from('app_settings').delete().in('key', ['federation_mail_rules', 'federation_mail_tpl']);
+  var r = await db.from('app_settings').insert([
+    { key: 'federation_mail_rules', value: JSON.stringify(rules) },
+    { key: 'federation_mail_tpl', value: tpl }
+  ]);
+  if (r.error) { toast('Fehler: ' + r.error.message); return; }
+  _federationRules = rules; _federationTplId = tpl;
+  renderFederationRules();
+  toast('✅ Verbands-Zusatzmails gespeichert (' + rules.length + ' Regel' + (rules.length === 1 ? '' : 'n') + ')');
 }
 
 async function loadParticipants() {
@@ -11341,6 +11569,7 @@ async function saveFormFieldConfig() {
 
 async function loadSettings() {
   try { await loadFormFieldConfig(); } catch(e) { console.error('loadFormFieldConfig error:', e); }
+  try { await loadFederationRulesSettings(); } catch(e) { console.error('loadFederationRulesSettings error:', e); }
   try { await loadCertificateSettings(); } catch(e) { console.error('loadCertificateSettings error:', e); }
   try { await loadLetterTypesSettings(); } catch(e) { console.error('loadLetterTypesSettings error:', e); }
   try { await loadPhysioConfig(); } catch(e) { console.error('loadPhysioConfig error:', e); }
