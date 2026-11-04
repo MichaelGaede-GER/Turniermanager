@@ -879,6 +879,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
             <div class="form-grid">
               <div class="form-group"><label>Package</label><select id="f_package" onchange="updatePackagePrice(); applyPackageMealDays(this.value);"><option value="">– wählen –</option></select></div>
               <div class="form-group"><label>Package-Preis (€)</label><input type="number" id="f_package_price" placeholder="0.00" step="0.01" onchange="calcTotal()" /></div>
+              <div class="form-group"><label>Entry Fee / Meldegebühr (€)</label><input type="number" id="f_entry_fee" placeholder="0.00" step="0.01" oninput="calcTotal()" onchange="calcTotal()" /></div>
 
               <div class="form-group" style="grid-column:1/-1"><label>Memo / Notiz</label><textarea id="f_memo" placeholder="Interne Anmerkung…"></textarea></div>
             </div>
@@ -906,7 +907,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
               </div>
               <div class="form-group">
                 <label>Meal Preis (€)</label>
-                <input type="number" id="f_meal_option_price" placeholder="0.00" step="0.01" style="background:var(--bg2);color:var(--text2)" />
+                <input type="number" id="f_meal_option_price" placeholder="0.00" step="0.01" oninput="calcTotal()" style="background:var(--bg2);color:var(--text2)" />
               </div>
 <input type="hidden" id="f_transport_booked" value="Nein" />
               <div class="form-group" style="grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -1075,7 +1076,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
                   </select>
                 </div>
                 <div class="form-group"><label>Letter-Preis (€)</label>
-                  <input type="number" id="f_confirmation_letter_price" step="0.01" placeholder="0.00" />
+                  <input type="number" id="f_confirmation_letter_price" step="0.01" placeholder="0.00" oninput="calcTotal()" />
                 </div>
                 <div class="form-group" style="grid-column:1/-1">
                   <div style="font-size:12px;color:var(--text3);padding:10px 12px;background:var(--bg2);border-radius:var(--radius)">
@@ -1186,7 +1187,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
                 </select>
               </div>
               <div class="form-group">
-                <label>Gesamt (€) <span style="font-size:11px;color:var(--text3)">(Package + VISA Express)</span></label>
+                <label>Gesamt (€) <span style="font-size:11px;color:var(--text3)">(Package + Entry Fee + Meal + Letter + VISA Express)</span></label>
                 <input type="number" id="f_total" placeholder="0.00" step="0.01" readonly style="background:var(--bg3);font-weight:600;color:var(--blue)" />
               </div>
               <div class="form-group">
@@ -6535,7 +6536,10 @@ async function sendParticipantConfirmation(id) {
   _sec('Payment');
   _add('Status', p.payment_status);
   _add('Entry Fee', (p.entry_fee != null && p.entry_fee !== '') ? Number(p.entry_fee).toFixed(2) + ' EUR' : null);
-  _add('Total', (p.total != null && p.total !== '') ? Number(p.total).toFixed(2) + ' EUR' : null);
+  // Total: gespeicherten Wert nehmen; fehlt er oder ist er 0, aus allen Positionen summieren.
+  var _mailTotal = parseFloat(p.total) || 0;
+  if (_mailTotal <= 0) _mailTotal = computeParticipantTotal(p);
+  _add('Total', _mailTotal.toFixed(2) + ' EUR');
 
   if (p.memo) { _sec('Additional Notes'); _s.push(p.memo); }
 
@@ -7043,13 +7047,34 @@ function updatePackagePrice(forceTransportDefault) {
   applyPackageMealDefaults(null, false);
 }
 
+// Summiert alle Kostenpositionen des Teilnehmer-Formulars:
+// Package + Entry Fee + Meal Option + Confirmation Letter + VISA Express.
+function getFormTotalParts() {
+  function num(id) { var el = document.getElementById(id); return el ? (parseFloat(el.value) || 0) : 0; }
+  var isExpress = document.getElementById('f_express') && document.getElementById('f_express').checked;
+  var visa = document.getElementById('f_visa') && document.getElementById('f_visa').value;
+  var needsVisa = visa && visa !== 'Nicht erforderlich';
+  var parts = {
+    pkg: num('f_package_price'),
+    entry: num('f_entry_fee'),
+    meal: num('f_meal_option_price'),
+    letter: (document.getElementById('f_confirmation_letter_type') || {}).value ? num('f_confirmation_letter_price') : 0,
+    visaExp: (needsVisa && isExpress) ? (visaExpressFee || 0) : 0
+  };
+  parts.total = parts.pkg + parts.entry + parts.meal + parts.letter + parts.visaExp;
+  return parts;
+}
+// Gleiche Summe für einen gespeicherten Teilnehmer-Datensatz (z.B. für E-Mails).
+function computeParticipantTotal(p) {
+  function num(v) { return parseFloat(v) || 0; }
+  var needsVisa = p.visa && p.visa !== 'Nicht erforderlich';
+  var visaExp = (needsVisa && p.express === 'Ja') ? (visaExpressFee || 0) : 0;
+  var letter = p.confirmation_letter_type ? num(p.confirmation_letter_price) : 0;
+  return num(p.package_price) + num(p.entry_fee) + num(p.meal_option_price) + letter + visaExp;
+}
+
 function calcTotal() {
-  const pkg = parseFloat(document.getElementById('f_package_price')?.value) || 0;
-  const isExpress = document.getElementById('f_express')?.checked;
-  const visa = document.getElementById('f_visa')?.value;
-  const needsVisa = visa && visa !== 'Nicht erforderlich';
-  const visaFee = (needsVisa && isExpress) ? visaExpressFee : 0;
-  const total = pkg + visaFee;
+  const total = getFormTotalParts().total;
   const totalEl = document.getElementById('f_total');
   if (totalEl) totalEl.value = total.toFixed(2);
   updateTotalBreakdown();
@@ -7317,6 +7342,7 @@ async function editEntry(id) {
   setTimeout(updateVisaFee, 100);
   setTimeout(updateLetterBanner, 120);
   document.getElementById('f_package_price').value = p.package_price||'';
+  var _efEl = document.getElementById('f_entry_fee'); if (_efEl) _efEl.value = (p.entry_fee != null && p.entry_fee !== '') ? p.entry_fee : '';
   const shirtQtyEl2 = document.getElementById('f_shirt_qty'); if (shirtQtyEl2) shirtQtyEl2.value = p.shirt_qty||1;
 
   document.getElementById('f_amount_received').value = p.amount_received||'';
@@ -12650,6 +12676,7 @@ function updateConfirmationLetterPrice() {
   var visaSel = document.getElementById('f_visa');
   if (visaSel && sel.value && visaSel.value === 'Nicht erforderlich') visaSel.value = 'Beantragt';
   if (typeof updateLetterBanner === 'function') updateLetterBanner();
+  calcTotal();
 }
 function prefillConfirmationLetter() {
   var fn=document.getElementById('f_firstname')&&document.getElementById('f_firstname').value||'';
@@ -14079,21 +14106,25 @@ function updateTotalBreakdown() {
   var isExp = document.getElementById('f_express')&&document.getElementById('f_express').checked;
   var visa2 = document.getElementById('f_visa')&&document.getElementById('f_visa').value;
   var needsVisa = visa2 && visa2 !== 'Nicht erforderlich';
-  var vf    = needsVisa && isExp ? visaExpressFee : 0;
+  var _tp   = getFormTotalParts();
+  var vf    = _tp.visaExp;
   var recv  = parseFloat(document.getElementById('f_amount_received')&&document.getElementById('f_amount_received').value)||0;
-  var total2 = pkg + vf;
+  var total2 = _tp.total;
   var open  = Math.max(0, total2 - recv);
   var pkgCode = document.getElementById('f_package')&&document.getElementById('f_package').value;
   var el = document.getElementById('totalBreakdown');
   if (!el) return;
-  if (!pkgCode) { el.textContent = '- wähle Package -'; return; }
+  if (!pkgCode && total2 <= 0) { el.textContent = '- wähle Package / Entry Fee -'; return; }
 
   // Check if person has withdrawn
   var isWithdrawn = document.getElementById('f_withdraw') && document.getElementById('f_withdraw').checked;
   var wdDateVal   = document.getElementById('f_withdraw_date') && document.getElementById('f_withdraw_date').value;
 
   var rows = '<div style="display:grid;grid-template-columns:1fr auto;gap:4px 16px;font-size:13px">';
-  rows += '<span style="color:var(--text2)">Package ('+pkgCode+'):</span><span>'+fmt(pkg)+'</span>';
+  if (pkgCode) rows += '<span style="color:var(--text2)">Package ('+pkgCode+'):</span><span>'+fmt(pkg)+'</span>';
+  if (_tp.entry > 0)  rows += '<span style="color:var(--text2)">Entry Fee:</span><span>+ '+fmt(_tp.entry)+'</span>';
+  if (_tp.meal > 0)   rows += '<span style="color:var(--text2)">Meal Option:</span><span>+ '+fmt(_tp.meal)+'</span>';
+  if (_tp.letter > 0) rows += '<span style="color:var(--text2)">Confirmation Letter:</span><span>+ '+fmt(_tp.letter)+'</span>';
   if (vf > 0) rows += '<span style="color:var(--text2)">VISA Express:</span><span>+ '+fmt(vf)+'</span>';
   rows += '<span style="color:var(--text2);border-top:1px solid var(--border);padding-top:4px">Gesamt:</span>'
        +  '<span style="font-weight:600;color:var(--blue);border-top:1px solid var(--border);padding-top:4px">'+fmt(total2)+'</span>';
@@ -16690,7 +16721,7 @@ function onMealOptionSelect() {
   var price = opt ? parseFloat(opt.getAttribute('data-price')) || 0 : 0;
   var priceEl = document.getElementById('f_meal_option_price');
   if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
-  updateTotalBreakdown();
+  calcTotal();
 }
 
 
