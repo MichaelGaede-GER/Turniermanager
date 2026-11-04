@@ -342,7 +342,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
       <div class="brand">MG Sports EM</div>
       <div class="sub" data-i18n="sidebar_sub">Turnierverwaltung 2026</div>
       <!-- Wird bei jedem Push automatisch per GitHub Action (.github/workflows/version.yml) gesetzt – nicht von Hand aendern -->
-      <div class="app-version" id="appVersion" title="Version 1.0.299 · Commit 25d1606 · 04.11.2026 13:37"><!--APP_VERSION-->v1.0.299 · 04.11.2026 13:37<!--/APP_VERSION--></div>
+      <div class="app-version" id="appVersion" title="Version 1.0.298 · Commit d3be6de · 01.11.2026 22:04"><!--APP_VERSION-->v1.0.298 · 01.11.2026 22:04<!--/APP_VERSION--></div>
       <span class="role-badge" id="roleBadge">Admin</span>
     </div>
     <div class="nav-section" data-i18n="nav_section_overview">Übersicht</div>
@@ -6509,6 +6509,7 @@ async function sendParticipantConfirmation(id) {
   _sec(_hasHotel ? 'Package & Hotel' : 'Package');
   _add('Package', p.package);
   _add('Package Price', (p.package_price != null && p.package_price !== '') ? Number(p.package_price).toFixed(2) + ' EUR' : null);
+  _add('Entry Fee', (parseFloat(p.entry_fee) || 0) > 0 ? Number(p.entry_fee).toFixed(2) + ' EUR' : null);
   _add('Room Type', p.room_type);
   _add('Room Number', p.room_number);
   _add('Hotel', p.hotel);
@@ -6534,8 +6535,6 @@ async function sendParticipantConfirmation(id) {
   }
 
   _sec('Payment');
-  _add('Status', p.payment_status);
-  _add('Entry Fee', (p.entry_fee != null && p.entry_fee !== '') ? Number(p.entry_fee).toFixed(2) + ' EUR' : null);
   // Total: gespeicherten Wert nehmen; fehlt er oder ist er 0, aus allen Positionen summieren.
   var _mailTotal = parseFloat(p.total) || 0;
   if (_mailTotal <= 0) _mailTotal = computeParticipantTotal(p);
