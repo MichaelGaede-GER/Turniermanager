@@ -342,7 +342,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
       <div class="brand">MG Sports EM</div>
       <div class="sub" data-i18n="sidebar_sub">Turnierverwaltung 2026</div>
       <!-- Wird bei jedem Push automatisch per GitHub Action (.github/workflows/version.yml) gesetzt – nicht von Hand aendern -->
-      <div class="app-version" id="appVersion" title="Version 1.0.300 · Commit ccc6743 · 04.11.2026 13:41"><!--APP_VERSION-->v1.0.300 · 04.11.2026 13:41<!--/APP_VERSION--></div>
+      <div class="app-version" id="appVersion" title="Version 1.0.298 · Commit d3be6de · 01.11.2026 22:04"><!--APP_VERSION-->v1.0.298 · 01.11.2026 22:04<!--/APP_VERSION--></div>
       <span class="role-badge" id="roleBadge">Admin</span>
     </div>
     <div class="nav-section" data-i18n="nav_section_overview">Übersicht</div>
@@ -1397,7 +1397,8 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
                   </select>
                 </div>
                 <div class="form-group"><label>Datum der Entscheidung</label><input type="date" id="f_endorsement_date" /></div>
-                <div class="form-group" style="grid-column:1/-1"><label>Grund der Ablehnung <span style="color:var(--text3);font-weight:400">(wird dem Spieler bei „Abgelehnt" online angezeigt)</span></label><textarea id="f_endorsement_reason" rows="3" placeholder="z.B. No endorsement received from the national federation."></textarea></div>
+                <div class="form-group" style="grid-column:1/-1"><label>Grund der Ablehnung <span style="color:var(--text3);font-weight:400">(wird dem Spieler bei „Abgelehnt" online angezeigt)</span></label><textarea id="f_endorsement_reason" rows="3" placeholder="z.B. No endorsement received from the national federation."></textarea>
+                  <button type="button" class="btn danger" style="margin-top:8px;font-size:12px;padding:5px 12px" onclick="sendFederationRejectionFromForm()" title="Absage-Mail an Teilnehmer + Nationalverband senden (Text: Einstellungen → Verbands-Zusatzmails)">⛔ Absage-Mail an Teilnehmer + Verband senden</button></div>
                 <div class="form-group" style="grid-column:1/-1"><label>Interne Notiz</label><textarea id="f_endorsement_notes" rows="4" placeholder="z.B. Verband kontaktiert am …, Rückmeldung …"></textarea></div>
                 <div class="form-group" style="grid-column:1/-1"><label>Schriftliches Endorsement (PDF)</label>
                   <div id="entryEndorsementDocView" style="font-size:12px;color:var(--text3);padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2)">Kein PDF hinterlegt – Upload in der Personendatenbank (Tab „Endorsement").</div>
@@ -2657,7 +2658,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
             <button class="btn primary" style="font-size:11px;padding:4px 10px" onclick="saveFederationRules()">💾 Speichern</button>
           </div>
           <div class="card-body">
-            <p style="font-size:13px;color:var(--text2);margin-bottom:10px">Wird beim Versand der <strong>Bestätigungs-E-Mail</strong> (📧 in der Teilnehmerliste) erkannt, dass der Teilnehmer aus einem der hier hinterlegten Länder kommt, wird zusätzlich zur normalen Bestätigung eine <strong>zweite E-Mail an den Teilnehmer und den Verband</strong> geschickt (z.B. Pakistan → Pakistan Squash Federation).</p>
+            <p style="font-size:13px;color:var(--text2);margin-bottom:10px">Wird beim Versand der <strong>Bestätigungs-E-Mail</strong> (📧 in der Teilnehmerliste) erkannt, dass der Teilnehmer aus einem der hier hinterlegten Länder kommt, wird zusätzlich zur normalen Bestätigung eine <strong>zweite E-Mail an den Teilnehmer und den Verband</strong> geschickt (z.B. Pakistan → Pakistan Squash Federation).<br>Stimmt der Verband nicht zu, kann pro Teilnehmer zusätzlich eine <strong>Absage-Mail</strong> ausgelöst werden – über ⛔ in der Teilnehmerliste oder im Teilnehmer-Formular (Tab Endorsement). Die Absage geht nie automatisch raus.</p>
             <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Platzhalter für Betreff/Text: <code>{name}</code> <code>{firstname}</code> <code>{lastname}</code> <code>{event}</code> <code>{country}</code> <code>{dob}</code> <code>{category}</code> <code>{esid}</code> <code>{email}</code> <code>{club}</code> <code>{federation}</code></p>
             <div class="form-group" style="max-width:360px;margin-bottom:14px">
               <label>EmailJS-Vorlage für Zusatzmails (Template-ID, max. 24 Zeichen)</label>
@@ -6602,6 +6603,13 @@ var FEDERATION_RULE_DEFAULT = {
     + 'According to the tournament regulations, players from {country} require the confirmation (endorsement) of their national federation before their entry can be accepted.\n\n'
     + 'We kindly ask you to confirm the participation of {name} by replying to this email.\n\n'
     + 'Dear {firstname}, this email has also been sent to you for your information. Your entry will only be confirmed once we have received the endorsement of your federation.\n\n'
+    + 'Kind regards\nTournament Organisation',
+  rejection_subject: 'Entry not accepted: {name} – {event}',
+  rejection_body: 'Dear {firstname},\n\nunfortunately we have not received the endorsement of {federation} for your participation in {event} (category {category}).\n\n'
+    + 'According to the tournament regulations, players from {country} can only be accepted with the confirmation of their national federation. We are therefore sorry to inform you that your entry cannot be accepted.\n\n'
+    + 'Reason: {reason}\n\n'
+    + 'Any entry fee already paid will be refunded.\n\n'
+    + 'Dear {federation}, this email has been sent to you for your information.\n\n'
     + 'Kind regards\nTournament Organisation'
 };
 var _federationRules = null;
@@ -6646,7 +6654,8 @@ function _fedFill(text, p, evName, rule) {
     event: evName || 'the tournament', country: countryName,
     dob: p.dob || '-', category: p.events || '-', esid: p.member_id || '-',
     email: p.email || '', club: p.verein || '-',
-    federation: (rule && rule.federation_name) || 'National Federation'
+    federation: (rule && rule.federation_name) || 'National Federation',
+    reason: p.endorsement_reason || 'No endorsement received from the national federation.'
   };
   return String(text || '').replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : m; });
 }
@@ -6658,11 +6667,16 @@ function _fedRecipients(rule, p) {
   return list.filter(function (m) { var k = m.toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; });
 }
 
-async function _sendFederationMail(rule, p, evName) {
+async function _sendFederationMail(rule, p, evName, kind) {
+  var isRej = kind === 'rejection';
   var to = _fedRecipients(rule, p);
   if (!to.length) return false;
-  var subject = _fedFill(rule.subject || FEDERATION_RULE_DEFAULT.subject, p, evName, rule);
-  var body = _fedFill(rule.body || FEDERATION_RULE_DEFAULT.body, p, evName, rule);
+  var subject = isRej
+    ? _fedFill(rule.rejection_subject || FEDERATION_RULE_DEFAULT.rejection_subject, p, evName, rule)
+    : _fedFill(rule.subject || FEDERATION_RULE_DEFAULT.subject, p, evName, rule);
+  var body = isRej
+    ? _fedFill(rule.rejection_body || FEDERATION_RULE_DEFAULT.rejection_body, p, evName, rule)
+    : _fedFill(rule.body || FEDERATION_RULE_DEFAULT.body, p, evName, rule);
   try {
     await emailjs.send(ADMIN_EMAILJS_SERVICE_ID, _federationTplId || FEDERATION_TPL_DEFAULT, {
       to_email: to.join(','),
@@ -6675,7 +6689,7 @@ async function _sendFederationMail(rule, p, evName) {
       subject: subject,
       message: body
     });
-    toast('📧 Verbands-Mail (' + (rule.federation_name || rule.countries) + ') an ' + to.join(', ') + ' gesendet');
+    toast((isRej ? '⛔ Absage-Mail' : '📧 Verbands-Mail') + ' (' + (rule.federation_name || rule.countries) + ') an ' + to.join(', ') + ' gesendet');
     return true;
   } catch (e) {
     var err = (e && (e.text || e.message)) || String(e);
@@ -6685,6 +6699,56 @@ async function _sendFederationMail(rule, p, evName) {
     }
     return false;
   }
+}
+
+// ---- Absage-Mail (Verband hat nicht zugestimmt) — wird nur manuell ausgelöst ----
+// fromForm=true: Aufruf aus dem Teilnehmer-Formular (Tab Endorsement) — dann wird der
+// dort eingetragene (evtl. noch ungespeicherte) Ablehnungsgrund verwendet.
+async function sendFederationRejection(id, fromForm) {
+  if (!id) { toast('⚠ Teilnehmer bitte zuerst speichern.'); return; }
+  if (!_ensureEmailjs()) { toast('⚠ E-Mail-Dienst (EmailJS) nicht geladen – bitte Seite neu laden.'); return; }
+  var pr = await db.from('participants').select('*').eq('id', id).single();
+  if (pr.error || !pr.data) { toast('Teilnehmer nicht gefunden.'); return; }
+  var p = pr.data;
+  if (fromForm) {
+    var rEl = document.getElementById('f_endorsement_reason');
+    if (rEl && rEl.value.trim()) p.endorsement_reason = rEl.value.trim();
+  }
+  await _loadFederationRules();
+  var rules = _matchFederationRules(p.country);
+  if (!rules.length) { toast('⚠ Für das Land „' + (p.country || '?') + '“ ist keine aktive Verbands-Regel hinterlegt (Einstellungen → Verbands-Zusatzmails).'); return; }
+
+  var info = rules.map(function (fr) { return '• ' + (fr.federation_name || fr.countries) + ' → ' + _fedRecipients(fr, p).join(', '); }).join('\n');
+  if (!confirm('⛔ ABSAGE-Mail senden für ' + p.firstname + ' ' + p.lastname + '?\n\nEmpfänger:\n' + info
+    + '\n\nGrund: ' + (p.endorsement_reason || '(Standardtext)')
+    + '\n\nDer Endorsement-Status wird auf „Abgelehnt“ gesetzt.')) return;
+
+  var evName = 'the tournament';
+  try { var ev = await db.from('events').select('name').eq('id', p.event_id).single(); if (ev.data && ev.data.name) evName = ev.data.name; } catch (e) {}
+
+  var ok = false;
+  for (var i = 0; i < rules.length; i++) { if (await _sendFederationMail(rules[i], p, evName, 'rejection')) ok = true; }
+  if (!ok) return;
+
+  var today = new Date().toISOString().slice(0, 10);
+  var stamp = 'Absage-Mail an Teilnehmer/Verband gesendet am ' + new Date().toLocaleString('de-DE');
+  var notesEl = fromForm ? document.getElementById('f_endorsement_notes') : null;
+  var notes = ((notesEl ? notesEl.value : p.endorsement_notes) || '').trim();
+  notes = notes ? notes + '\n' + stamp : stamp;
+  var patch = { endorsement_status: 'rejected', endorsement_date: p.endorsement_date || today, endorsement_notes: notes };
+  if (fromForm && p.endorsement_reason) patch.endorsement_reason = p.endorsement_reason;
+  try { await db.from('participants').update(patch).eq('id', id); } catch (e) { console.warn('endorsement update:', e); }
+  if (fromForm) {
+    var st = document.getElementById('f_endorsement_status'); if (st) st.value = 'rejected';
+    var dt = document.getElementById('f_endorsement_date'); if (dt && !dt.value) dt.value = patch.endorsement_date;
+    if (notesEl) notesEl.value = notes;
+  } else if (typeof loadParticipants === 'function') {
+    loadParticipants();
+  }
+}
+function sendFederationRejectionFromForm() {
+  var id = document.getElementById('editingId') && document.getElementById('editingId').value;
+  sendFederationRejection(id, true);
 }
 
 // ---- Einstellungen-UI ----
@@ -6708,7 +6772,9 @@ function _collectFederationRulesFromUi() {
       federation_email: String(f('federation_email')).trim(),
       include_participant: !!f('include_participant'),
       subject: f('subject'),
-      body: f('body')
+      body: f('body'),
+      rejection_subject: f('rejection_subject'),
+      rejection_body: f('rejection_body')
     });
   });
   return out;
@@ -6738,6 +6804,9 @@ function renderFederationRules() {
       +   '<div class="form-group" style="grid-column:1/-1"><label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-f="include_participant"' + (r.include_participant !== false ? ' checked' : '') + '> Teilnehmer erhält diese Zusatzmail ebenfalls (gemeinsame Mail an Teilnehmer + Verband)</label></div>'
       +   '<div class="form-group" style="grid-column:1/-1"><label>Betreff</label><input type="text" data-f="subject" style="' + inputStyle + '" value="' + esc(r.subject) + '"></div>'
       +   '<div class="form-group" style="grid-column:1/-1"><label>Text</label><textarea data-f="body" rows="9" style="' + inputStyle + ';font-family:inherit">' + esc(r.body) + '</textarea></div>'
+      +   '<div style="grid-column:1/-1;margin-top:6px;padding-top:10px;border-top:1px dashed var(--border2);font-size:13px;font-weight:700;color:var(--red)">⛔ Absage-Mail (Verband hat nicht zugestimmt) – wird nur manuell ausgelöst</div>'
+      +   '<div class="form-group" style="grid-column:1/-1"><label>Betreff Absage</label><input type="text" data-f="rejection_subject" style="' + inputStyle + '" value="' + esc(r.rejection_subject != null ? r.rejection_subject : FEDERATION_RULE_DEFAULT.rejection_subject) + '"></div>'
+      +   '<div class="form-group" style="grid-column:1/-1"><label>Text Absage <span style="color:var(--text3);font-weight:400">(zusätzlicher Platzhalter: <code>{reason}</code> = Grund der Ablehnung aus dem Tab Endorsement)</span></label><textarea data-f="rejection_body" rows="9" style="' + inputStyle + ';font-family:inherit">' + esc(r.rejection_body != null ? r.rejection_body : FEDERATION_RULE_DEFAULT.rejection_body) + '</textarea></div>'
       + '</div></div>';
   }).join('');
 }
@@ -6780,6 +6849,7 @@ async function saveFederationRules() {
 }
 
 async function loadParticipants() {
+  if (_federationRules === null) { try { await _loadFederationRules(); } catch (e) {} }
   const search = document.getElementById('filterSearch').value.toLowerCase();
   const age = document.getElementById('filterAge').value;
   const status = document.getElementById('filterStatus').value;
@@ -6885,6 +6955,9 @@ async function loadParticipants() {
       : '-';
     var eb = '<button class="btn" style="font-size:11px;padding:3px 8px" data-id="'+p.id+'" onclick="editEntry(this.dataset.id)">Bearbeiten</button>';
     var confBtn = '<button class="btn" style="font-size:11px;padding:3px 6px" data-id="'+p.id+'" onclick="sendParticipantConfirmation(this.dataset.id)" title="Bestätigungs-/Verwaltungs-E-Mail (mit Bearbeiten-, Bestätigungs- und Rückzugs-Link) an den Teilnehmer senden">📧</button>';
+    if (typeof _matchFederationRules === 'function' && _federationRules && _matchFederationRules(p.country).length) {
+      confBtn += ' <button class="btn" style="font-size:11px;padding:3px 6px'+(p.endorsement_status==='rejected'?';opacity:.55':'')+'" data-id="'+p.id+'" onclick="sendFederationRejection(this.dataset.id)" title="'+(p.endorsement_status==='rejected'?'Bereits abgelehnt – ':'')+'Absage-Mail an Teilnehmer + Verband senden (Verband hat nicht zugestimmt)">⛔</button>';
+    }
     var vb = '<button class="btn" style="font-size:11px;padding:3px 6px" data-id="'+p.id+'" onclick="generateEventpass(this.dataset.id)">Pass</button>';
     var certBtn = '<button class="btn" style="font-size:11px;padding:3px 6px" data-id="'+p.id+'" onclick="generateCertificate(this.dataset.id)" title="Certificate of Participation erstellen">🎓</button>';
     var sendBtns = '<button class="btn" style="font-size:11px;padding:3px 6px" data-id="'+p.id+'" onclick="sendPassWhatsApp(this.dataset.id)" title="Per WhatsApp senden">📲</button>'
