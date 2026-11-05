@@ -2512,7 +2512,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
 
       <div class="page" id="page-events">
         <div class="page-header"><h2>Event-Verwaltung</h2>
-          <button class="btn primary" onclick="openEventModal()">+ Neues Event</button>
+          <button class="btn primary" id="newEventBtn" onclick="openEventModal()">+ Neues Event</button>
         </div>
         <div id="noActiveEventWarning" style="display:none;background:var(--amber-bg);border:1px solid var(--amber);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--amber)">
           ⚠️ Kein aktives Event ausgewählt. Bitte ein Event aktivieren um Teilnehmer zu erfassen.
@@ -11296,6 +11296,7 @@ async function loadWithdrawPolicy() {
 }
 
 async function saveWithdrawPolicy() {
+  if (!canWrite('events')) { toast('⛔ Nur Lesezugriff auf Events'); return; }
   if (!currentEventId) { toast('⚠️ Bitte zuerst ein Event aktivieren'); return; }
   var df = document.getElementById('wp_date_full') && document.getElementById('wp_date_full').value;
   var dh = document.getElementById('wp_date_half') && document.getElementById('wp_date_half').value;
@@ -11356,6 +11357,7 @@ async function loadTournamentLinks() {
 }
 
 async function saveTournamentLinks() {
+  if (!canWrite('events')) { toast('⛔ Nur Lesezugriff auf Events'); return; }
   if (!currentEventId) { toast('⚠️ Bitte zuerst ein Event aktivieren'); return; }
   var links = {
     tournamentplanner: (document.getElementById('tl_tournamentplanner') && document.getElementById('tl_tournamentplanner').value.trim()) || '',
@@ -12473,6 +12475,7 @@ async function loadEvents() {
     visibleEvents = eventsCache.filter(function(e){ return allowedIds.indexOf(e.id) !== -1; });
   }
   var tb=document.getElementById('eventsTable'); if(!tb) return;
+  var evWrite=canWrite('events');
   tb.innerHTML=visibleEvents.length?visibleEvents.map(function(e){
     var isActive=e.id===currentEventId;
     return '<tr style="'+(isActive?'background:var(--green-bg)':'')+'">'
@@ -12480,13 +12483,25 @@ async function loadEvents() {
       +'<td>'+(cntMap[e.id]||0)+' Teilnehmer</td>'
       +'<td>'+(isActive?'<span class="status paid">Aktiv</span>':'<span class="status new">Inaktiv</span>')+'</td>'
       +'<td style="display:flex;gap:6px">'
-      +(isActive?'':'<button class="btn primary" style="font-size:11px;padding:3px 8px" onclick="setActiveEvent(\''+e.id+'\',\''+e.name.replace(/'/g,"\\'") +'\')">Aktivieren</button>')
-      +'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="editEvent(\''+e.id+'\')">Bearbeiten</button>'
-      +'<button class="btn danger" style="font-size:11px;padding:3px 8px" onclick="deleteEvent(\''+e.id+'\')">Loeschen</button>'
+      +(isActive?'':'<button class="btn primary ev-activate" style="font-size:11px;padding:3px 8px" onclick="setActiveEvent(\''+e.id+'\',\''+e.name.replace(/'/g,"\\'") +'\')">Aktivieren</button>')
+      +(evWrite?'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="editEvent(\''+e.id+'\')">Bearbeiten</button>'
+      +'<button class="btn danger" style="font-size:11px;padding:3px 8px" onclick="deleteEvent(\''+e.id+'\')">Loeschen</button>':'')
       +'</td></tr>';
   }).join(''):'<tr><td colspan="8" class="empty">Keine Events verfügbar</td></tr>';
+  applyEventsPageAccess();
+}
+// Nur-Lesen-Rolle: Event-Seite sehen, aber nichts anlegen/ändern/löschen.
+// "Aktivieren" bleibt erlaubt, da es nur die eigene Ansicht (localStorage) umschaltet.
+function applyEventsPageAccess() {
+  var ro = !canWrite('events');
+  var nb = document.getElementById('newEventBtn'); if (nb) nb.style.display = ro ? 'none' : '';
+  document.querySelectorAll('#page-events input, #page-events select, #page-events textarea, #page-events button:not(.ev-activate)').forEach(function(el){
+    if (el.id === 'newEventBtn') return;
+    el.disabled = ro;
+  });
 }
 function openEventModal(ev) {
+  if (!canWrite('events')) { toast('⛔ Nur Lesezugriff auf Events'); return; }
   document.getElementById('eventModalTitle').textContent=ev?'Event bearbeiten':'Neues Event';
   document.getElementById('eventEditId').value=ev?ev.id:'';
   document.getElementById('eventName').value=ev?ev.name||'':'';
@@ -12512,12 +12527,14 @@ function isoToDatetimeLocal(iso) {
 }
 function editEvent(id) { var ev=eventsCache.find(function(e){return e.id===id;}); if(ev) openEventModal(ev); }
 async function deleteEvent(id) {
+  if (!canWrite('events')) { toast('⛔ Nur Lesezugriff auf Events'); return; }
   if(!confirm('Event wirklich loeschen?')) return;
   await db.from('events').delete().eq('id',id);
   if(currentEventId===id){currentEventId=null;currentEventName=null;localStorage.removeItem('mg_active_event');updateActiveEventDisplay();}
   toast('Event geloescht'); loadEvents();
 }
 async function saveEvent() {
+  if (!canWrite('events')) { toast('⛔ Nur Lesezugriff auf Events'); return; }
   var name=document.getElementById('eventName').value.trim(); if(!name){toast('Event-Name ist Pflicht');return;}
   var id=document.getElementById('eventEditId').value;
   var deadlineLocal=document.getElementById('eventRegDeadline').value;
@@ -17279,6 +17296,7 @@ async function runSync() {
 var userRolesCache = [];
 var PERMISSIONS = [
   {key:'dashboard',    label:'Dashboard'},
+  {key:'events',       label:'Events'},
   {key:'participants', label:'Teilnehmer'},
   {key:'entry',        label:'Neu erfassen'},
   {key:'packages',     label:'Packages'},
