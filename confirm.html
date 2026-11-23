@@ -175,6 +175,34 @@ async function doConfirm(token) {
   }
 }
 
+// ---------- Rücktrittsgründe (ersetzen das frühere Namens-Formular) ----------
+// Gespeichert wird immer der englische Text (wie bisher im Rücktrittsformular).
+var WD_REASONS = [
+  { en: 'An acute injury, such as a muscle strain, bruising, or back or knee problems', de: 'Akute Verletzung, z. B. Muskelzerrung, Prellung, Rücken- oder Knieprobleme' },
+  { en: 'Illness, fever, gastrointestinal problems, or circulatory issues', de: 'Krankheit, Fieber, Magen-Darm- oder Kreislaufprobleme' },
+  { en: 'Aggravation of a pre-existing injury', de: 'Verschlimmerung einer bestehenden Verletzung' },
+  { en: 'Medical advice or instructions not to continue playing', de: 'Ärztlicher Rat, nicht (weiter) zu spielen' },
+  { en: 'Health problems occurring during the tournament', de: 'Gesundheitliche Probleme während des Turniers' },
+  { en: 'Travel or visa problems', de: 'Reise- oder Visaprobleme' },
+  { en: 'Personal or family reasons', de: 'Persönliche oder familiäre Gründe' },
+  { en: 'School, study or work commitments', de: 'Schule, Studium oder Beruf' }
+];
+function wdReasonHtml() {
+  var de = LANG === 'de';
+  return '<div style="text-align:left;margin:0 0 16px">'
+    + '<label for="wdReason" style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">'
+    + (de ? 'Grund für den Rücktritt *' : 'Reason for withdrawal *') + '</label>'
+    + '<select id="wdReason" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px">'
+    + '<option value="">' + (de ? '– bitte wählen –' : '– please select –') + '</option>'
+    + WD_REASONS.map(function (r) { return '<option value="' + esc(r.en) + '">' + esc(de ? r.de : r.en) + '</option>'; }).join('')
+    + '<option value="Other">' + (de ? 'Sonstiges (bitte angeben)' : 'Other (please specify)') + '</option>'
+    + '</select>'
+    + '<textarea id="wdDetails" rows="3" placeholder="' + (de ? 'Details (bei „Sonstiges“ Pflicht)' : 'Details (required for “Other”)') + '" '
+    + 'style="width:100%;margin-top:8px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;font-family:inherit"></textarea>'
+    + '<div id="wdReasonErr" style="display:none;color:#dc2626;font-size:13px;margin-top:6px"></div>'
+    + '</div>';
+}
+
 // ---------- Modus 2: Withdraw anfordern -----------------------------
 // Zuerst eine Vorschau laden (Name + Altersklasse), damit der Teilnehmer
 // visuell pruefen kann, dass er die richtige Anmeldung zurueckzieht.
@@ -216,7 +244,7 @@ async function withdrawPrompt(token) {
         + esc(d.event_name) + '</div>' : '')
     + '</div>';
 
-  var txt = (n > 1 ? t('wp_p_group').replace('{N}', n) : t('wp_p')) + '</p>' + listHtml + '<p>';
+  var txt = (n > 1 ? t('wp_p_group').replace('{N}', n) : t('wp_p')) + '</p>' + listHtml + wdReasonHtml() + '<p>';
 
   render('\u26a0\ufe0f', t('wp_t'), txt,
     '<button class="btn-danger" id="wdYes">' + t('wp_yes') + '</button>'
@@ -226,7 +254,19 @@ async function withdrawPrompt(token) {
 }
 
 async function doWithdrawRequest(token) {
+  // Grund ist Pflicht und wird vor dem eigentlichen Rücktritt gespeichert
+  var reasonEl = document.getElementById('wdReason'), detEl = document.getElementById('wdDetails');
+  var reason = reasonEl ? reasonEl.value : '', details = detEl ? detEl.value.trim() : '';
+  var errEl = document.getElementById('wdReasonErr');
+  if (!reason || (reason === 'Other' && !details)) {
+    if (errEl) { errEl.style.display = 'block'; errEl.textContent = !reason
+      ? (LANG === 'de' ? 'Bitte einen Grund auswählen.' : 'Please select a reason.')
+      : (LANG === 'de' ? 'Bitte den Grund angeben.' : 'Please specify your reason.'); }
+    return;
+  }
   busy(t('processing'));
+  var rr = await db.rpc('pub_set_withdraw_reason', { p_token: token, p_reason: reason, p_details: details || null });
+  if (rr.error) console.warn('pub_set_withdraw_reason', rr.error);
   var res = await db.rpc('request_withdraw', { p_token: token });
   if (res.error) {
     console.error('request_withdraw', res);
@@ -275,6 +315,8 @@ async function doWithdrawConfirm(token) {
   var name = esc((d.name || '').trim());
 
   if (d.code === 'withdrawn' || d.code === 'already_withdrawn') {
+    // Rücktritt mit Grund in die Liste der Turnier-Rückzüge übernehmen
+    try { await db.rpc('pub_finalize_withdraw', { p_token: token }); } catch (e) { console.warn('pub_finalize_withdraw', e); }
     render('\u2705', t('fin_t'),
       t('fin_p').replace('{NAME}', (name && (d.count || 1) === 1) ? ' <span class="name">' + name + '</span>' : ''));
   } else if (d.code === 'expired') {

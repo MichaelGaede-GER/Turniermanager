@@ -202,6 +202,16 @@
           <input type="checkbox" id="g_consent" style="margin-top:2px" />
           <span id="declText" data-i18n-html="decl_text">I confirm that all information provided for this group is correct and I agree, on behalf of all listed participants, to the <a href="https://european-junior-open.com/payment-information/" target="_blank" style="color:var(--blue)">tournament regulations and withdrawal policy</a>. I understand that this registration is subject to confirmation by the organizer.</span>
         </label>
+        <div id="privacyBlock" style="display:none;margin-top:14px">
+          <details style="background:#f6f8fb;border:1px solid #d7dce6;border-radius:8px;padding:10px 12px">
+            <summary id="privacySummary" style="cursor:pointer;font-weight:600;font-size:13px">🔒 Privacy notice</summary>
+            <div id="privacyText" style="white-space:pre-wrap;font-size:12px;line-height:1.55;margin-top:8px;max-height:340px;overflow:auto"></div>
+          </details>
+          <label class="checkbox-row" style="align-items:flex-start;line-height:1.6;margin-top:10px">
+            <input type="checkbox" id="privacyConsent" style="width:18px;height:18px;margin-top:2px;accent-color:var(--blue);flex-shrink:0" />
+            <span id="privacyConsentText"></span>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -658,6 +668,7 @@ function setLang(lang) {
   try { localStorage.setItem('groupRegLang', LANG); } catch (e) {}
   applyStaticTranslations();
   refreshDynamicTranslations();
+  renderPrivacyNotice();
 }
 
 function refreshDynamicTranslations() {
@@ -767,6 +778,7 @@ async function init() {
 
   await checkGroupLeaderColumns();
   await loadWithdrawalPolicyText();
+  await loadPrivacyNoticeText();
   await loadPackages();
   await loadRoomAvailability();
   await loadHotels();
@@ -862,6 +874,39 @@ function onGroupPhotoSelected(id) {
 
 // Laedt das Foto hoch und gibt die oeffentliche URL zurueck. Ohne neue Datei bleibt
 // im Bearbeitungsmodus das bestehende Foto erhalten (sonst null).
+var PRIVACY_CONSENT_DE = 'Ich habe den Datenschutzhinweis gelesen und bin – auch im Namen aller aufgeführten Teilnehmer (bei Minderjährigen als Erziehungsberechtigte/r bzw. mit deren Zustimmung) – mit der Verarbeitung der Daten zu den genannten Zwecken einverstanden.';
+var PRIVACY_CONSENT_EN = 'I have read the privacy notice and, also on behalf of all listed participants (for minors as parent/legal guardian or with their consent), agree to the processing of the data for the purposes stated.';
+// ===== Datenschutzhinweis (Text pro Event in den Einstellungen, DE/EN) =====
+var privacyNotice = null;
+async function loadPrivacyNoticeText() {
+  privacyNotice = null;
+  try {
+    if (eventId) {
+      var r = await db.from('app_settings').select('value').eq('key', 'privacy_notice_' + eventId).limit(1);
+      if (r.data && r.data[0] && r.data[0].value) {
+        var v = JSON.parse(r.data[0].value);
+        if ((v.de || '').trim() || (v.en || '').trim()) privacyNotice = v;
+      }
+    }
+  } catch (e) { console.warn('Datenschutzhinweis', e); }
+  renderPrivacyNotice();
+}
+function renderPrivacyNotice() {
+  var block = document.getElementById('privacyBlock');
+  if (!block) return;
+  if (!privacyNotice) { block.style.display = 'none'; return; }
+  block.style.display = 'block';
+  var de = LANG === 'de';
+  var txt = (de ? (privacyNotice.de || privacyNotice.en) : (privacyNotice.en || privacyNotice.de)) || '';
+  document.getElementById('privacyText').textContent = txt;
+  document.getElementById('privacySummary').textContent = de ? '🔒 Datenschutzhinweis anzeigen' : '🔒 Show privacy notice';
+  document.getElementById('privacyConsentText').textContent = de ? PRIVACY_CONSENT_DE : PRIVACY_CONSENT_EN;
+}
+function privacyConsentMissing() {
+  var cb = document.getElementById('privacyConsent');
+  return !!privacyNotice && !(cb && cb.checked);
+}
+
 async function uploadGroupParticipantPhoto(id, participantId) {
   var inp = document.getElementById('p_photo_' + id);
   if (!inp || !inp.files || !inp.files[0]) return existingGroupPhotoUrl[id] || null;
@@ -1067,6 +1112,7 @@ function prefillGroupParticipant(id, p) {
 
   // Bereits gespeichertes Foto merken und anzeigen, damit es beim Speichern erhalten bleibt
   if (p.photo_url) { existingGroupPhotoUrl[id] = p.photo_url; setGroupPhotoPreview(id, p.photo_url); }
+  if (p.privacy_accepted_at) { var _pc = document.getElementById('privacyConsent'); if (_pc) _pc.checked = true; }
 
   setVal('p_lastname_' + id, p.lastname); setVal('p_firstname_' + id, p.firstname);
   setVal('p_country_' + id, p.country); setVal('p_dob_' + id, p.dob); setVal('p_gender_' + id, p.gender);
@@ -1147,7 +1193,10 @@ function prefillGroupParticipant(id, p) {
       var note = document.createElement('div');
       note.id = 'p_passport_existing_' + id;
       note.style.cssText = 'font-size:12px;color:#1e7a34;margin-top:6px';
-      note.innerHTML = '✅ Bereits hochgeladen — <a href="' + p.passport_doc_url + '" target="_blank" style="color:#1e7a34">Dokument ansehen</a>. Nur eine neue Datei wählen, wenn du es ersetzen möchtest.';
+      // Pässe liegen im privaten Speicher – im öffentlichen Formular nur Hinweis, kein Link
+      note.innerHTML = LANG === 'de'
+        ? '✅ Bereits hochgeladen. Nur eine neue Datei wählen, wenn du es ersetzen möchtest.'
+        : '✅ Already uploaded. Only choose a new file if you want to replace it.';
       wrap.appendChild(note);
     }
   }
@@ -2156,6 +2205,7 @@ async function submitGroupRegistration() {
 
   if (!participantIds.length) errors.push(t('err_at_least_one_participant'));
   if (!document.getElementById('g_consent').checked) errors.push(t('err_declaration'));
+  if (privacyConsentMissing()) errors.push(LANG === 'de' ? 'Datenschutzhinweis (bitte bestätigen)' : 'Privacy notice (please confirm)');
 
   var esidsInGroup = [];
   var rows = [];
@@ -2325,12 +2375,12 @@ async function submitGroupRegistration() {
       try {
         var pFile = passportFileInput.files[0];
         var pExt = pFile.type === 'application/pdf' ? 'pdf' : 'jpg';
+        // Sicherheit: Pässe in den PRIVATEN Speicher (nur für Admins sichtbar)
         var pPath = participantId + '/passport_' + Date.now() + '.' + pExt;
-        var pUp = await db.storage.from('person-media').upload(pPath, pFile, { upsert: false, contentType: pFile.type });
+        var pUp = await db.storage.from('person-docs').upload(pPath, pFile, { upsert: false, contentType: pFile.type });
         if (!pUp.error) {
-          var pPub = db.storage.from('person-media').getPublicUrl(pPath);
-          passportDocUrl = pPub.data.publicUrl;
-        }
+          passportDocUrl = 'privdoc:' + pPath;
+        } else { console.warn('Pass-Upload fehlgeschlagen:', pUp.error.message); }
       } catch (e) { /* Upload-Fehler blockiert die Registrierung nicht */ }
     }
 
@@ -2349,6 +2399,7 @@ async function submitGroupRegistration() {
     rows.push({
       id: participantId,
       passport_doc_url: passportDocUrl,
+      privacy_accepted_at: privacyNotice ? new Date().toISOString() : undefined,
       photo_url: participantPhotoUrl,
       // Zimmerpartner als echte Referenz (nur gesetzt, wenn die Spalte existiert).
       // Der „Anker" eines Zimmers bekommt null, die Mitreisenden zeigen auf ihn.

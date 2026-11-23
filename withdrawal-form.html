@@ -354,6 +354,30 @@
   }
 
   init();
+
+  // Sicherheit: Der Rücktritt läuft nur noch über den persönlichen Link aus der
+  // Bestätigungsmail (mit Grund-Auswahl und Sicherheits-Mail). Dieses Formular zeigt
+  // daher nur noch einen Hinweis.
+  (function showLinkOnlyNotice() {
+    function draw() {
+      var fc = document.getElementById('formContainer');
+      var sb = document.getElementById('successBox');
+      if (fc) fc.style.display = 'none';
+      if (!sb) return;
+      var de = LANG === 'de';
+      sb.innerHTML = '<div style="font-size:48px;margin-bottom:12px">✉️</div>'
+        + '<h2 style="font-size:22px;margin-bottom:10px">' + (de ? 'Rücktritt nur über deinen persönlichen Link' : 'Withdrawal only via your personal link') + '</h2>'
+        + '<p style="color:var(--text2);font-size:14px;line-height:1.7">'
+        + (de
+          ? 'Zum Schutz deiner Daten kannst du dich nur noch über den Link <strong>„Withdraw“</strong> in deiner Anmeldebestätigung (E-Mail) abmelden. Dort wählst du auch den Grund aus.<br><br>Du findest die E-Mail nicht mehr oder bist bereits vor Ort? Bitte wende dich direkt an die Turnierleitung.'
+          : 'To protect your data, withdrawals are only possible via the <strong>“Withdraw”</strong> link in your registration confirmation email. You will also select the reason there.<br><br>Can’t find the email or already at the venue? Please contact the tournament office directly.')
+        + '</p>';
+      sb.style.display = 'block';
+    }
+    draw();
+    var _origSetLang = setLang;
+    setLang = function(l) { _origSetLang(l); draw(); };
+  })();
 </script>
 </body>
 </html>

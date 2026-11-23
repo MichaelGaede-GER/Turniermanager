@@ -2556,6 +2556,37 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
 
         <div class="card" style="margin-top:16px">
           <div class="card-header">
+            <h3>🔒 Datenschutz &amp; Pässe — <span id="pn_event_label" style="color:var(--blue)">kein Event aktiv</span></h3>
+          </div>
+          <div class="card-body">
+            <p style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Dieser Hinweis erscheint in beiden Anmeldeformularen (je nach Sprachwahl Deutsch oder Englisch). Teilnehmer müssen ihn per Checkbox bestätigen; der Zeitpunkt wird beim Teilnehmer gespeichert.
+              Platzhalter in <strong>[eckigen Klammern]</strong> bitte ersetzen. Bitte den Text rechtlich prüfen lassen.
+            </p>
+            <div class="form-grid two" style="gap:12px">
+              <div class="form-group"><label>Datenschutzhinweis – Deutsch</label><textarea id="pn_text_de" style="height:260px;font-size:12px"></textarea></div>
+              <div class="form-group"><label>Privacy notice – English</label><textarea id="pn_text_en" style="height:260px;font-size:12px"></textarea></div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+              <button class="btn primary" onclick="savePrivacyNotice()">💾 Für dieses Event speichern</button>
+              <button class="btn" onclick="fillPrivacyNoticeTemplate()">📄 Vorlage einfügen</button>
+            </div>
+            <div style="border-top:1px solid var(--border);margin:18px 0 12px"></div>
+            <div style="font-weight:600;font-size:13px;margin-bottom:6px">Pässe &amp; Ausweise</div>
+            <p style="font-size:12px;color:var(--text2);margin-bottom:10px">
+              <strong>Privater Speicher:</strong> Pässe, Ausweise und Endorsement-Dokumente liegen in einem geschützten Speicher und sind nur für eingeloggte Admins sichtbar. Ältere Dateien aus dem öffentlichen Speicher einmalig verschieben.<br>
+              <strong>Löschen:</strong> entfernt alle Pass-/Ausweisdateien der Teilnehmer des aktiven Events – und bei denselben Personen auch in der Personendatenbank.
+            </p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn" onclick="migratePrivateDocs()">🔒 Pässe in privaten Speicher verschieben</button>
+              <button class="btn danger" onclick="deleteEventPassports()">🗑 Pässe dieses Events löschen</button>
+            </div>
+            <div id="privDocProgress" style="font-size:12px;color:var(--text2);margin-top:10px"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-header">
             <h3>🔗 Turnier-Links — <span id="tl_event_label" style="color:var(--blue)">kein Event aktiv</span></h3>
           </div>
           <div class="card-body">
@@ -4666,7 +4697,11 @@ MG Sports Event Management</textarea>
     <button class="modal-close" onclick="closeModal('userModal')">×</button>
     <h2>Benutzer anlegen</h2>
     <div class="form-group" style="margin-bottom:12px"><label>E-Mail *</label><input type="email" id="newUserEmail" placeholder="email@example.com" /></div>
-    <div class="form-group" style="margin-bottom:12px"><label>Passwort *</label><input type="password" id="newUserPwd" placeholder="Mindestens 6 Zeichen" /></div>
+    <div style="font-size:12px;color:var(--text2);background:var(--bg2);border-radius:var(--radius);padding:10px 12px;margin-bottom:12px;line-height:1.55">
+      🔒 Neue Benutzer werden aus Sicherheitsgründen in zwei Schritten angelegt:<br>
+      <strong>1.</strong> Hier E-Mail und Rolle eintragen (gibt die Berechtigung).<br>
+      <strong>2.</strong> In Supabase einladen – die Person erhält eine E-Mail und setzt ihr Passwort selbst. Den Link dazu zeigt das Tool nach dem Anlegen.
+    </div>
     <div class="form-group" style="margin-bottom:16px"><label>Rolle</label>
       <select id="newUserRole"><option>Admin</option><option>Turnierstab</option><option>Registrierung</option><option>Referee</option><option>ESF Official</option><option>DSQV</option></select>
     </div>
@@ -6163,7 +6198,7 @@ function nav(page) {
   else if (page === 'broadcast') { populateBcFilterOptions(); loadBcTemplates(); loadBroadcastRecipients(); }
   else if (page === 'checkin') loadCheckin();
   else if (page === 'mealcheck') loadMealCheck();
-  else if (page === 'events') { loadEvents(); loadWithdrawPolicy().catch(function(){}); loadTournamentLinks().catch(function(){}); }
+  else if (page === 'events') { loadEvents(); loadWithdrawPolicy().catch(function(){}); loadTournamentLinks().catch(function(){}); loadPrivacyNotice().catch(function(){}); }
   else if (page === 'backup') initBackupPage();
   else if (page === 'persons') loadPersons();
   else if (page === 'settings') loadSettings();
@@ -7547,9 +7582,9 @@ async function saveEntry() {
     try {
       if (entryPassportFile.type.startsWith('image/')) {
         var compressedEntryDoc = await compressImageFile(entryPassportFile, 1400, 0.8);
-        entryPassportUrl = await uploadPersonMediaFile(participantTempId + '/passport.jpg', compressedEntryDoc, 'image/jpeg');
+        entryPassportUrl = await uploadPrivateDoc(participantTempId + '/passport_' + Date.now() + '.jpg', compressedEntryDoc, 'image/jpeg');
       } else {
-        entryPassportUrl = await uploadPersonMediaFile(participantTempId + '/passport.pdf', entryPassportFile, 'application/pdf');
+        entryPassportUrl = await uploadPrivateDoc(participantTempId + '/passport_' + Date.now() + '.pdf', entryPassportFile, 'application/pdf');
       }
     } catch (e) {
       toast('⚠️ Passfoto-Upload fehlgeschlagen: ' + (e.message||e));
@@ -10595,29 +10630,39 @@ async function loadUsers() {
 
 function openUserModal() { document.getElementById('userModal').classList.add('open'); }
 
+// Sicherheit: Die Selbstregistrierung in Supabase ist abgeschaltet. Der Zugang entsteht
+// daher in zwei Schritten: (1) Eintrag in app_users = Berechtigung, (2) Einladung im
+// Supabase-Dashboard = Login. Nur Personen, die in app_users stehen, sehen Daten.
+var SUPABASE_USERS_DASHBOARD = 'https://supabase.com/dashboard/project/xngiyfqbjyhnmgukhanj/auth/users';
 async function createUser() {
-  var email = document.getElementById('newUserEmail').value.trim();
-  var pwd = document.getElementById('newUserPwd').value;
+  var email = document.getElementById('newUserEmail').value.trim().toLowerCase();
   var role = document.getElementById('newUserRole') && document.getElementById('newUserRole').value || 'Turnierstab';
-  if (!email || !pwd) { toast('E-Mail und Passwort erforderlich'); return; }
+  if (!email || email.indexOf('@') === -1) { toast('Bitte eine gültige E-Mail eingeben'); return; }
 
-  // Register in Supabase Auth (for login)
-  var authResult = await db.auth.signUp({ email: email, password: pwd });
-  if (authResult.error && !authResult.error.message.includes('already registered')) {
-    toast('Auth Fehler: ' + authResult.error.message);
-    return;
-  }
-
-  // Save to app_users table
   var ins = await db.from('app_users').insert({ email: email, role: role });
-  if (ins.error) {
-    toast('DB Fehler: ' + ins.error.message);
-    return;
-  }
+  if (ins.error) { toast('DB Fehler: ' + ins.error.message); return; }
 
   closeModal('userModal');
-  toast('✅ Benutzer angelegt: ' + email);
   loadUsers();
+  var existing = document.getElementById('inviteInfoModal'); if (existing) existing.remove();
+  var m = document.createElement('div');
+  m.id = 'inviteInfoModal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;width:460px;max-width:100%;color:var(--text)">'
+    + '<h3 style="margin-bottom:10px;font-size:16px">✅ Berechtigung angelegt</h3>'
+    + '<p style="font-size:13px;line-height:1.6;color:var(--text2)"><strong>' + email + '</strong> hat jetzt die Rolle <strong>' + role + '</strong>.<br><br>'
+    + 'Letzter Schritt – Login einrichten:<br>'
+    + '1. Supabase-Benutzerverwaltung öffnen (Knopf unten)<br>'
+    + '2. Oben rechts <strong>„Add user“ → „Send invitation“</strong><br>'
+    + '3. Diese E-Mail-Adresse eintragen und senden.<br><br>'
+    + 'Die Person erhält eine E-Mail, setzt ihr Passwort selbst und kann sich danach hier anmelden.</p>'
+    + '<div style="display:flex;gap:8px;margin-top:14px">'
+    + '<button class="btn" style="flex:1" onclick="navigator.clipboard.writeText(\'' + email + '\');toast(\'E-Mail kopiert\')">📋 E-Mail kopieren</button>'
+    + '<a class="btn primary" style="flex:1;text-align:center;text-decoration:none" href="' + SUPABASE_USERS_DASHBOARD + '" target="_blank">Supabase öffnen</a>'
+    + '</div>'
+    + '<button class="btn" style="width:100%;margin-top:8px" onclick="document.getElementById(\'inviteInfoModal\').remove()">Schließen</button>'
+    + '</div>';
+  document.body.appendChild(m);
 }
 
 function editAppUser(id, email, currentRole) {
@@ -11328,6 +11373,186 @@ async function loadWithdrawPolicy() {
     } catch(e) { console.error('loadWithdrawPolicy error:', e); }
   }
   renderWithdrawPolicySettings();
+}
+
+
+// ===================== DATENSCHUTZ & PÄSSE (Paket C) =====================
+var PRIVACY_TEMPLATE_DE = [
+'Datenschutzhinweis',
+'',
+'Verantwortlich für die Verarbeitung deiner Daten ist MG Sports & Eventmanagement, [Inhaber/in], [Straße Hausnummer], [PLZ] Alzenau, E-Mail: [E-Mail-Adresse].',
+'',
+'Zweck: Wir verarbeiten deine Angaben, um deine Anmeldung zum Turnier durchzuführen – Teilnahme, Auslosung, Hotel- und Transferbuchung, Verpflegung, Zahlungsabwicklung, Spielerausweis, Urkunden sowie (auf Wunsch) ein Confirmation Letter für die Einreise.',
+'',
+'Daten: Name, Geschlecht, Geburtsdatum, Nationalität, Verein, Kontaktdaten, Spieler-ID (ESID), Foto, Reise- und Hoteldaten. Für einen Confirmation Letter zusätzlich Passdaten und eine Kopie des Reisepasses. Notfallkontakt sowie Angaben zu Allergien, Medikamenten oder Gesundheit sind freiwillig und werden nur für Notfälle während des Turniers verwendet.',
+'',
+'Rechtsgrundlage: Durchführung der Anmeldung (Art. 6 Abs. 1 lit. b DSGVO); freiwillige Gesundheitsangaben auf Grundlage deiner Einwilligung (Art. 9 Abs. 2 lit. a DSGVO), die du jederzeit widerrufen kannst. Bei Minderjährigen erteilt die/der Erziehungsberechtigte die Einwilligung.',
+'',
+'Empfänger: Turnierleitung und Schiedsrichter, das gebuchte Hotel, Transferdienstleister, der europäische bzw. nationale Squashverband (Ergebnisse, Ranglisten) sowie die Turniersoftware (Tournament Planner / tournamentsoftware.com). Technische Dienstleister: Supabase (Datenbank, Serverstandort EU – Irland) und EmailJS (Versand der Bestätigungsmails).',
+'',
+'Speicherdauer: Kopien von Reisepässen werden nach dem Turnier gelöscht. Alle übrigen Daten werden 3 Jahre nach dem Turnier gelöscht, soweit keine gesetzlichen Aufbewahrungspflichten (z. B. für Rechnungen) entgegenstehen.',
+'',
+'Deine Rechte: Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung, Datenübertragbarkeit, Widerspruch sowie Widerruf erteilter Einwilligungen. Wende dich dazu an [E-Mail-Adresse]. Du hast außerdem das Recht, dich bei einer Datenschutz-Aufsichtsbehörde zu beschweren (z. B. Bayerisches Landesamt für Datenschutzaufsicht).',
+'',
+'Fotos und Videos: Während des Turniers können Fotos und Videos entstehen, die zur Berichterstattung auf Website und Social Media veröffentlicht werden.'
+].join('\n');
+var PRIVACY_TEMPLATE_EN = [
+'Privacy notice',
+'',
+'The controller responsible for processing your data is MG Sports & Eventmanagement, [owner], [street and number], [postcode] Alzenau, Germany, email: [email address].',
+'',
+'Purpose: We process your details to handle your tournament registration – participation, draw, hotel and transfer booking, meals, payment, player pass, certificates and (on request) a confirmation letter for your visa/entry.',
+'',
+'Data: name, gender, date of birth, nationality, club, contact details, player ID (ESID), photo, travel and hotel details. For a confirmation letter additionally passport details and a copy of your passport. Emergency contact and information on allergies, medication or health are voluntary and only used in case of an emergency during the tournament.',
+'',
+'Legal basis: performance of the registration (Art. 6(1)(b) GDPR); voluntary health information based on your consent (Art. 9(2)(a) GDPR), which you may withdraw at any time. For minors, consent is given by the parent/legal guardian.',
+'',
+'Recipients: tournament office and referees, the booked hotel, transfer providers, the European/national squash federation (results, rankings) and the tournament software (Tournament Planner / tournamentsoftware.com). Technical service providers: Supabase (database, servers located in the EU – Ireland) and EmailJS (sending confirmation emails).',
+'',
+'Retention: passport copies are deleted after the tournament. All other data is deleted 3 years after the tournament unless statutory retention obligations (e.g. for invoices) apply.',
+'',
+'Your rights: access, rectification, erasure, restriction of processing, data portability, objection and withdrawal of consent. Please contact [email address]. You also have the right to lodge a complaint with a data protection supervisory authority.',
+'',
+'Photos and videos: photos and videos may be taken during the tournament and published for reporting on our website and social media.'
+].join('\n');
+
+async function loadPrivacyNotice() {
+  var lbl = document.getElementById('pn_event_label');
+  if (lbl) lbl.textContent = currentEventName || 'kein Event aktiv';
+  var de = document.getElementById('pn_text_de'), en = document.getElementById('pn_text_en');
+  if (!de || !en) return;
+  de.value = ''; en.value = '';
+  if (!currentEventId) return;
+  var r = await db.from('app_settings').select('value').eq('key', 'privacy_notice_' + currentEventId).limit(1);
+  var row = r.data && r.data[0];
+  if (row && row.value) {
+    try { var v = JSON.parse(row.value); de.value = v.de || ''; en.value = v.en || ''; } catch (e) {}
+  }
+}
+function fillPrivacyNoticeTemplate() {
+  var de = document.getElementById('pn_text_de'), en = document.getElementById('pn_text_en');
+  if ((de.value || en.value) && !confirm('Vorhandenen Text durch die Vorlage ersetzen?')) return;
+  de.value = PRIVACY_TEMPLATE_DE; en.value = PRIVACY_TEMPLATE_EN;
+  toast('Vorlage eingefügt – Platzhalter [ ] ersetzen und speichern');
+}
+async function savePrivacyNotice() {
+  if (!canWrite('events')) { toast('⛔ Nur Lesezugriff auf Events'); return; }
+  if (!currentEventId) { toast('⚠️ Bitte zuerst ein Event aktivieren'); return; }
+  var de = document.getElementById('pn_text_de').value.trim();
+  var en = document.getElementById('pn_text_en').value.trim();
+  if (/\[[^\]]+\]/.test(de + en) && !confirm('Im Text stehen noch Platzhalter in [eckigen Klammern]. Trotzdem speichern?')) return;
+  var key = 'privacy_notice_' + currentEventId;
+  await db.from('app_settings').delete().eq('key', key);
+  var r = await db.from('app_settings').insert({ key: key, value: JSON.stringify({ de: de, en: en }) });
+  if (r.error) { toast('Fehler: ' + r.error.message); return; }
+  toast('✅ Datenschutzhinweis für dieses Event gespeichert');
+}
+
+// Pfad einer Datei im öffentlichen Speicher aus ihrer URL ermitteln
+function personMediaPathFromUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  var m = url.match(/\/storage\/v1\/object\/public\/person-media\/([^?#]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// Einmalig: Pässe/Ausweise/Endorsements aus dem öffentlichen in den privaten Speicher verschieben
+async function migratePrivateDocs() {
+  if (!canWrite('events')) { toast('⛔ Keine Berechtigung'); return; }
+  var prog = document.getElementById('privDocProgress');
+  function say(t) { if (prog) prog.innerHTML = t; }
+  say('Suche Dokumente im öffentlichen Speicher …');
+  var jobs = []; // {table, id, col, url}
+  for (var tbl of ['participants', 'persons']) {
+    for (var col of ['passport_doc_url', 'endorsement_pdf_url']) {
+      var from = 0;
+      while (true) {
+        var r = await db.from(tbl).select('id,' + col).like(col, '%/object/public/person-media/%').range(from, from + 999);
+        if (r.error) { if (/column/i.test(r.error.message)) break; say('<span style="color:var(--red)">Fehler: ' + r.error.message + '</span>'); return; }
+        (r.data || []).forEach(function(row) { jobs.push({ table: tbl, id: row.id, col: col, url: row[col] }); });
+        if (!r.data || r.data.length < 1000) break;
+        from += 1000;
+      }
+    }
+  }
+  if (!jobs.length) { say('✅ Keine Dokumente mehr im öffentlichen Speicher.'); toast('Nichts zu verschieben'); return; }
+  if (!confirm(jobs.length + ' Verweise auf Pässe/Ausweise/Endorsements gefunden.\n\nJetzt in den privaten Speicher verschieben? Die alten öffentlichen Links funktionieren danach nicht mehr.')) { say(''); return; }
+
+  var moved = {};     // alter Pfad -> neue Referenz
+  var toRemove = {};  // alte Pfade, die danach gelöscht werden
+  var ok = 0, fail = 0, errs = [];
+  for (var i = 0; i < jobs.length; i++) {
+    var j = jobs[i];
+    say('Verschiebe ' + (i + 1) + ' / ' + jobs.length + ' …');
+    var oldPath = personMediaPathFromUrl(j.url);
+    if (!oldPath) { fail++; continue; }
+    try {
+      var ref = moved[oldPath];
+      if (!ref) {
+        var dl = await db.storage.from('person-media').download(oldPath);
+        if (dl.error) throw dl.error;
+        var newPath = oldPath.replace(/(\.[a-z0-9]+)$/i, '_' + Date.now() + '$1');
+        if (newPath === oldPath) newPath = oldPath + '_' + Date.now();
+        ref = await uploadPrivateDoc(newPath, dl.data, dl.data.type || undefined);
+        moved[oldPath] = ref;
+        toRemove[oldPath] = true;
+      }
+      var upd = {}; upd[j.col] = ref;
+      var ur = await db.from(j.table).update(upd).eq('id', j.id);
+      if (ur.error) throw ur.error;
+      ok++;
+    } catch (e) {
+      fail++; errs.push(j.table + ' ' + j.id + ': ' + (e.message || e));
+    }
+  }
+  // Alte öffentliche Dateien entfernen (nur die erfolgreich kopierten)
+  var paths = Object.keys(toRemove);
+  for (var k = 0; k < paths.length; k += 100) {
+    await db.storage.from('person-media').remove(paths.slice(k, k + 100));
+  }
+  say((fail ? '⚠️ ' : '✅ ') + ok + ' Verweise umgestellt, ' + paths.length + ' Dateien verschoben' + (fail ? ', ' + fail + ' Fehler:<br><small>' + errs.slice(0, 5).join('<br>') + '</small>' : '.'));
+  toast(ok + ' Dokumente in privaten Speicher verschoben');
+}
+
+// Pässe/Ausweise aller Teilnehmer des aktiven Events löschen – inkl. Personendatenbank
+async function deleteEventPassports() {
+  if (!canWrite('events')) { toast('⛔ Keine Berechtigung'); return; }
+  if (!currentEventId) { toast('⚠️ Bitte zuerst ein Event aktivieren'); return; }
+  var prog = document.getElementById('privDocProgress');
+  function say(t) { if (prog) prog.innerHTML = t; }
+  var pr = await db.from('participants').select('id,member_id,passport_doc_url').eq('event_id', currentEventId);
+  if (pr.error) { toast('Fehler: ' + pr.error.message); return; }
+  var parts = pr.data || [];
+  var memberIds = Array.from(new Set(parts.map(function(p){ return p.member_id; }).filter(Boolean)));
+  var persons = [];
+  for (var i = 0; i < memberIds.length; i += 200) {
+    var r = await db.from('persons').select('id,member_id,passport_doc_url').in('member_id', memberIds.slice(i, i + 200)).not('passport_doc_url', 'is', null);
+    persons = persons.concat(r.data || []);
+  }
+  var partsWithDoc = parts.filter(function(p){ return p.passport_doc_url; });
+  var personsWithDoc = persons.filter(function(p){ return p.passport_doc_url; });
+  if (!partsWithDoc.length && !personsWithDoc.length) { toast('Keine Pässe für dieses Event gespeichert'); return; }
+  var evName = currentEventName || '';
+  var typed = prompt('Es werden ' + partsWithDoc.length + ' Pass-Dateien bei Teilnehmern und ' + personsWithDoc.length +
+    ' in der Personendatenbank endgültig gelöscht.\n\nZur Bestätigung bitte den Event-Namen eintippen:\n' + evName);
+  if (typed === null) return;
+  if (typed.trim() !== evName.trim()) { toast('Event-Name stimmt nicht – nichts gelöscht'); return; }
+
+  var privPaths = {}, pubPaths = {};
+  partsWithDoc.concat(personsWithDoc).forEach(function(x) {
+    var u = x.passport_doc_url;
+    if (isPrivateDocRef(u)) privPaths[u.slice(PRIVATE_DOC_PREFIX.length)] = true;
+    else { var pp = personMediaPathFromUrl(u); if (pp) pubPaths[pp] = true; }
+  });
+  say('Lösche Dateien …');
+  var pl = Object.keys(privPaths), ul = Object.keys(pubPaths), errs = [];
+  for (var a = 0; a < pl.length; a += 100) { var d1 = await db.storage.from(PRIVATE_DOC_BUCKET).remove(pl.slice(a, a + 100)); if (d1.error) errs.push(d1.error.message); }
+  for (var b = 0; b < ul.length; b += 100) { var d2 = await db.storage.from('person-media').remove(ul.slice(b, b + 100)); if (d2.error) errs.push(d2.error.message); }
+  say('Entferne Verweise …');
+  var ids1 = partsWithDoc.map(function(p){ return p.id; }), ids2 = personsWithDoc.map(function(p){ return p.id; });
+  for (var c = 0; c < ids1.length; c += 200) { var u1 = await db.from('participants').update({ passport_doc_url: null }).in('id', ids1.slice(c, c + 200)); if (u1.error) errs.push(u1.error.message); }
+  for (var e = 0; e < ids2.length; e += 200) { var u2 = await db.from('persons').update({ passport_doc_url: null }).in('id', ids2.slice(e, e + 200)); if (u2.error) errs.push(u2.error.message); }
+  say((errs.length ? '⚠️ ' : '✅ ') + (pl.length + ul.length) + ' Dateien gelöscht, ' + ids1.length + ' Teilnehmer und ' + ids2.length + ' Personen bereinigt.' + (errs.length ? '<br><small>' + errs.slice(0, 5).join('<br>') + '</small>' : ''));
+  toast('🗑 Pässe des Events gelöscht');
 }
 
 async function saveWithdrawPolicy() {
@@ -13390,6 +13615,68 @@ function compressImageFile(file, maxDim, quality) {
 }
 
 // Lädt eine Blob/File in den Supabase Storage Bucket 'person-media' hoch und liefert die öffentliche URL zurück
+// ===== Private Dokumente (Pässe, Ausweise, Endorsements) =====
+// Liegen im privaten Speicher "person-docs". In der Datenbank steht statt einer öffentlichen
+// URL eine Referenz "privdoc:<pfad>". Beim Anzeigen erzeugt das Tool automatisch einen
+// kurz gültigen Link (siehe Observer unten) – überall, wo <img src> oder <a href> damit
+// gefüllt werden, ohne dass jede Anzeige-Stelle angepasst werden muss.
+var PRIVATE_DOC_BUCKET = 'person-docs';
+var PRIVATE_DOC_PREFIX = 'privdoc:';
+async function uploadPrivateDoc(path, blobOrFile, contentType) {
+  var up = await db.storage.from(PRIVATE_DOC_BUCKET).upload(path, blobOrFile, {
+    upsert: true,
+    contentType: contentType || blobOrFile.type || 'application/octet-stream'
+  });
+  if (up.error) throw up.error;
+  return PRIVATE_DOC_PREFIX + path;
+}
+function isPrivateDocRef(v) { return typeof v === 'string' && v.indexOf(PRIVATE_DOC_PREFIX) === 0; }
+var _signedDocCache = {};
+async function signedDocUrl(ref) {
+  if (!isPrivateDocRef(ref)) return ref;
+  var path = ref.slice(PRIVATE_DOC_PREFIX.length);
+  var c = _signedDocCache[path];
+  if (c && c.exp > Date.now()) return c.url;
+  var r = await db.storage.from(PRIVATE_DOC_BUCKET).createSignedUrl(path, 900); // 15 Minuten
+  if (r.error || !r.data) { console.warn('Signierter Link fehlgeschlagen', path, r.error); return ''; }
+  _signedDocCache[path] = { url: r.data.signedUrl, exp: Date.now() + 12 * 60 * 1000 };
+  return r.data.signedUrl;
+}
+async function _hydratePrivateDocEl(el) {
+  var attr = el.tagName === 'A' ? 'href' : 'src';
+  var ref = el.getAttribute(attr);
+  if (!isPrivateDocRef(ref)) return;
+  el.setAttribute('data-privdoc', ref);
+  el.setAttribute(attr, el.tagName === 'A' ? '#' : 'data:image/gif;base64,R0lGODlhAQABAAAAACw=');
+  var url = await signedDocUrl(ref);
+  if (url) el.setAttribute(attr, url);
+}
+function hydratePrivateDocs(root) {
+  (root || document).querySelectorAll('img[src^="privdoc:"], a[href^="privdoc:"], iframe[src^="privdoc:"]').forEach(_hydratePrivateDocEl);
+}
+(function startPrivateDocObserver() {
+  try {
+    var obs = new MutationObserver(function(muts) {
+      muts.forEach(function(m) {
+        if (m.type === 'attributes') {
+          var el = m.target;
+          if (el && (el.tagName === 'IMG' || el.tagName === 'A' || el.tagName === 'IFRAME')) _hydratePrivateDocEl(el);
+        } else {
+          m.addedNodes.forEach(function(n) {
+            if (n.nodeType !== 1) return;
+            if ((n.tagName === 'IMG' || n.tagName === 'A' || n.tagName === 'IFRAME')) _hydratePrivateDocEl(n);
+            if (n.querySelectorAll) hydratePrivateDocs(n);
+          });
+        }
+      });
+    });
+    var start = function() { obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'href'] }); hydratePrivateDocs(document); };
+    if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+  } catch (e) { console.warn('privdoc observer', e); }
+})();
+// Für window.open(...) mit einer Referenz
+async function openPrivateDoc(ref) { var u = await signedDocUrl(ref); if (u) window.open(u, '_blank'); }
+
 async function uploadPersonMediaFile(path, blobOrFile, contentType) {
   var up = await db.storage.from('person-media').upload(path, blobOrFile, {
     upsert: true,
@@ -13481,9 +13768,9 @@ async function savePerson() {
     try {
       if (personPassportFile.type.startsWith('image/')) {
         var compressedDoc = await compressImageFile(personPassportFile, 1400, 0.8);
-        passportUrl = await uploadPersonMediaFile(tempId + '/passport.jpg', compressedDoc, 'image/jpeg');
+        passportUrl = await uploadPrivateDoc(tempId + '/passport_' + Date.now() + '.jpg', compressedDoc, 'image/jpeg');
       } else {
-        passportUrl = await uploadPersonMediaFile(tempId + '/passport.pdf', personPassportFile, 'application/pdf');
+        passportUrl = await uploadPrivateDoc(tempId + '/passport_' + Date.now() + '.pdf', personPassportFile, 'application/pdf');
       }
       showUploadProgress(90,'Speichere...');
     } catch (e) {
@@ -13498,9 +13785,9 @@ async function savePerson() {
     try {
       if (personEndorsementFile.type.startsWith('image/')) {
         var compressedEnd = await compressImageFile(personEndorsementFile, 1600, 0.8);
-        endorsementUrl = await uploadPersonMediaFile(tempId + '/endorsement.jpg', compressedEnd, 'image/jpeg');
+        endorsementUrl = await uploadPrivateDoc(tempId + '/endorsement_' + Date.now() + '.jpg', compressedEnd, 'image/jpeg');
       } else {
-        endorsementUrl = await uploadPersonMediaFile(tempId + '/endorsement.pdf', personEndorsementFile, 'application/pdf');
+        endorsementUrl = await uploadPrivateDoc(tempId + '/endorsement_' + Date.now() + '.pdf', personEndorsementFile, 'application/pdf');
       }
     } catch (e) {
       hideUploadProgress();
@@ -13649,9 +13936,9 @@ async function migratePersonMediaToStorage() {
         var docBlob = base64ToBlob(p.passport_doc_url);
         if (docBlob.type.startsWith('image/')) {
           var compressedDoc = await compressBlobImage(docBlob, 1400, 0.8);
-          updates.passport_doc_url = await uploadPersonMediaFile(p.id + '/passport.jpg', compressedDoc, 'image/jpeg');
+          updates.passport_doc_url = await uploadPrivateDoc(p.id + '/passport_' + Date.now() + '.jpg', compressedDoc, 'image/jpeg');
         } else {
-          updates.passport_doc_url = await uploadPersonMediaFile(p.id + '/passport.pdf', docBlob, 'application/pdf');
+          updates.passport_doc_url = await uploadPrivateDoc(p.id + '/passport_' + Date.now() + '.pdf', docBlob, 'application/pdf');
         }
       }
       if (Object.keys(updates).length) {
