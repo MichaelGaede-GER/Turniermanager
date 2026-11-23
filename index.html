@@ -7338,19 +7338,8 @@ async function editEntry(id) {
     });
   }
   // Load room dropdown and pre-select current room
-  populateRoomDropdown().then(function() {
-    var rn = document.getElementById('f_room_number') && document.getElementById('f_room_number').value;
-    if (rn) {
-      var sel = document.getElementById('f_room_select');
-      if (sel) {
-        for (var i = 0; i < sel.options.length; i++) {
-          if (sel.options[i].getAttribute('data-number') === rn) { sel.value = sel.options[i].value; break; }
-        }
-      }
-      fillHotelRoomNoField();
-      checkRoomAvailability();
-    }
-  });
+  // Vorauswahl von Zimmer + Zimmerpartner passiert in populateRoomDropdown() selbst
+  populateRoomDropdown();
   ['arrival_time','departure_time'].forEach(f => { const el = document.getElementById('f_'+f); if (el) el.value = p[f]||''; });
   ['gender','role','events','shirt','payment_status','visa','mahnung','meal_plus','airport_plus','ams_bus','tp_check','room_type','airport_pickup_location'].forEach(f => { const el = document.getElementById('f_'+f); if (el) el.value = p[f]||''; });
   // Anreise-Art: Liste kommt aus den Einstellungen; ein gespeicherter Wert, der dort
@@ -7462,6 +7451,8 @@ async function editEntry(id) {
   await populateHotelDropdowns();
   const hotelSel = document.getElementById('f_hotel');
   if (hotelSel && p.hotel) hotelSel.value = p.hotel;
+  // Jetzt steht auch das Hotel fest -> Zimmer eindeutig (Hotel + Nummer) vorauswählen
+  populateRoomDropdown();
 
   // Meal-Info erst ganz am Schluss berechnen — vorher lief das per setTimeout(150)
   // und traf gelegentlich auf ein noch leeres Package-Dropdown, wodurch im Reiter
@@ -15005,44 +14996,43 @@ function fillHotelRoomNoField() {
   f.value = room && room.hotel_room_no ? room.hotel_room_no : '';
 }
 
+// Zimmer-Dropdown im Teilnehmerformular.
+// Wird beim Öffnen eines Teilnehmers mehrfach parallel aufgerufen (editEntry + nav('entry')).
+// Früher hat der zweite Aufruf das Dropdown neu aufgebaut und die gerade gesetzte
+// Zimmer-Auswahl wieder auf "– Zimmer wählen –" zurückgesetzt. Jetzt:
+//  - nur der jeweils letzte Aufruf schreibt ins Dropdown (Sequenz-Token)
+//  - die Vorauswahl erfolgt hier selbst aus Zimmernummer + Hotel des Formulars
+//  - Belegung wird pro Zimmer (Hotel + Nummer) gezählt, nicht nur pro Nummer
+var _roomDropdownSeq = 0;
 async function populateRoomDropdown() {
+  var mySeq = ++_roomDropdownSeq;
   await loadHotelRooms();
 
-  // Get current occupancy with names for all rooms (nur im aktiven Event)
-  var occQ = db.from('participants').select('room_number,room_type,lastname,firstname').neq('withdraw','Ja').not('room_number','is',null);
+  // Aktuelle Belegung (nur im aktiven Event)
+  var occQ = db.from('participants').select('id,room_number,room_type,hotel,lastname,firstname').neq('withdraw','Ja').not('room_number','is',null);
   if (currentEventId) occQ = occQ.eq('event_id', currentEventId);
   var occ = await occQ;
-  var occMap = {};       // room_number -> count
-  var occupantsMap = {}; // room_number -> [names]
-  (occ.data||[]).forEach(function(p) {
-    if (p.room_number) {
-      occMap[p.room_number] = (occMap[p.room_number]||0) + 1;
-      if (!occupantsMap[p.room_number]) occupantsMap[p.room_number] = [];
-      occupantsMap[p.room_number].push(p.lastname + ', ' + p.firstname);
-    }
-  });
+  if (mySeq !== _roomDropdownSeq) return; // ein neuerer Aufruf läuft – der übernimmt
 
   var sel = document.getElementById('f_room_select');
   if (!sel) return;
-  var cur = sel.value;
+
+  var editingId = document.getElementById('editingId') && document.getElementById('editingId').value;
+  var occMap = {};       // room.id -> Anzahl
+  var occupantsMap = {}; // room.id -> [Namen]
+  (occ.data||[]).forEach(function(p) {
+    if (!p.room_number) return;
+    if (editingId && String(p.id) === String(editingId)) return; // sich selbst nicht mitzählen
+    var room = findHotelRoom(p.hotel, p.room_number);
+    if (!room) return;
+    occMap[room.id] = (occMap[room.id]||0) + 1;
+    if (!occupantsMap[room.id]) occupantsMap[room.id] = [];
+    occupantsMap[room.id].push(p.lastname + ', ' + p.firstname);
+  });
 
   var maxMap = { 'Einzelzimmer': 1, 'Doppelzimmer': 2, 'Dreibettzimmer': 3 };
 
-  // Get currently editing participant's room (don't count them in occupancy)
-  var editingId = document.getElementById('editingId') && document.getElementById('editingId').value;
-  if (editingId) {
-    var ep = await db.from('participants').select('room_number,lastname,firstname').eq('id', editingId).single();
-    var editingRoom = ep.data && ep.data.room_number;
-    if (editingRoom) {
-      if (occMap[editingRoom]) occMap[editingRoom] = Math.max(0, occMap[editingRoom] - 1);
-      if (occupantsMap[editingRoom]) {
-        var editName = ep.data.lastname + ', ' + ep.data.firstname;
-        occupantsMap[editingRoom] = occupantsMap[editingRoom].filter(function(n){ return n !== editName; });
-      }
-    }
-  }
-
-  // Group rooms by hotel
+  // Zimmer nach Hotel gruppieren
   var byHotel = {};
   hotelRoomsCache.forEach(function(r) {
     var hotelName = r.hotels ? r.hotels.name : 'Kein Hotel';
@@ -15058,7 +15048,7 @@ async function populateRoomDropdown() {
     og.label = hotelName;
     rooms.forEach(function(room) {
       var max = maxMap[room.room_type] || 1;
-      var used = occMap[room.room_number] || 0;
+      var used = occMap[room.id] || 0;
       var free = max - used;
       var isFull = free <= 0;
       var opt = document.createElement('option');
@@ -15071,7 +15061,7 @@ async function populateRoomDropdown() {
       opt.setAttribute('data-hotelno', room.hotel_room_no || '');
       opt.disabled = isFull;
       var statusText = isFull ? ' [VOLL]' : free === max ? ' [frei]' : ' [' + free + '/' + max + ' frei]';
-      var names = occupantsMap[room.room_number] || [];
+      var names = occupantsMap[room.id] || [];
       var namesStr = names.length ? ' · ' + names.join(', ') : '';
       opt.textContent = 'Zimmer ' + room.room_number + (room.hotel_room_no ? ' (Hotel ' + room.hotel_room_no + ')' : '') + ' · ' + room.room_type + statusText + namesStr + (room.notes ? ' · ' + room.notes : '');
       if (isFull) opt.style.color = 'var(--red)';
@@ -15080,13 +15070,41 @@ async function populateRoomDropdown() {
     sel.appendChild(og);
   });
 
-  if (cur) sel.value = cur;
+  // Vorauswahl aus den Formularfeldern (gespeicherte Zimmernummer + Hotel des Teilnehmers)
+  var rn = (document.getElementById('f_room_number') && document.getElementById('f_room_number').value || '').trim();
+  var hn = document.getElementById('f_hotel') && document.getElementById('f_hotel').value;
+  var info = document.getElementById('roomSelectInfo');
+  if (info) info.textContent = '';
+  if (!rn) { sel.value = ''; return; }
+  var room = findHotelRoom(hn, rn);
+  if (room) {
+    sel.value = room.id;
+    var opt = sel.options[sel.selectedIndex];
+    var names = occupantsMap[room.id] || [];
+    if (info && opt) {
+      info.textContent = 'Zimmer ' + rn + (room.hotel_room_no ? ' (Hotel-Nr. ' + room.hotel_room_no + ')' : '')
+        + ' · ' + opt.getAttribute('data-hotel')
+        + (names.length ? ' · Zimmerpartner: ' + names.join(', ') : ' · noch kein Zimmerpartner');
+    }
+  } else {
+    // Zimmer existiert nicht (mehr) in der Zimmerliste dieses Events – trotzdem sichtbar machen,
+    // damit die Zuweisung nicht verloren geht.
+    var miss = document.createElement('option');
+    miss.value = '__missing__';
+    miss.setAttribute('data-number', rn);
+    miss.textContent = '⚠ Zimmer ' + rn + (hn ? ' · ' + hn : '') + ' (nicht in Zimmerliste dieses Events)';
+    sel.appendChild(miss);
+    sel.value = '__missing__';
+    if (info) info.textContent = 'Zimmer ' + rn + ' ist dem Teilnehmer zugewiesen, aber unter Einstellungen → Zimmer für dieses Event/Hotel nicht angelegt.';
+  }
+  fillHotelRoomNoField();
+  checkRoomAvailability();
 }
 
 async function onRoomSelect() {
   var sel = document.getElementById('f_room_select');
   var opt = sel && sel.options[sel.selectedIndex];
-  if (!opt || !opt.value) return;
+  if (!opt || !opt.value || opt.value === '__missing__') return;
 
   var num = opt.getAttribute('data-number');
   var type = opt.getAttribute('data-type');
@@ -18028,10 +18046,11 @@ async function applyPackageMealDays(packageCode) {
   var hasMealDays = pkg.pkg_breakfast_days || pkg.pkg_lunch_days || pkg.pkg_dinner_days;
   var mealIncluded = pkg.meal_included === 'Ja';
 
-  // Note: the master "Event Meals" checkbox (f_meal_plus) is intentionally left untouched
-  // for all packages EXCEPT "T" (Tournament Team) — for T it gets auto-activated, since
-  // Tournament Team members always get Event Meals included.
-  if (packageCode === 'T') {
+  // Erweitert: Jedes Package, das Mahlzeiten enthält (meal_included='Ja' oder hinterlegte
+  // Mahlzeiten-Tage), setzt beim AKTIVEN Wechsel des Packages "Ja, Event Meals gebucht".
+  // Läuft nur über onchange des Package-Dropdowns – beim Öffnen eines gespeicherten
+  // Teilnehmers wird nichts überschrieben, eine bewusste Abwahl bleibt also erhalten.
+  if (packageCode === 'T' || mealIncluded || hasMealDays) {
     var eventMealsCb = document.getElementById('f_meal_plus');
     if (eventMealsCb && !eventMealsCb.checked) {
       eventMealsCb.checked = true;
