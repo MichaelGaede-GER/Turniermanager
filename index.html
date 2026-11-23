@@ -3150,6 +3150,15 @@ dies ist unsere letzte Zahlungserinnerung..."></textarea></div>
               <thead><tr><th style="width:38%">Teilnehmerfeld (Zielsystem)</th><th style="width:52%">TP-Spalte (Quelle)</th><th style="width:10%"></th></tr></thead>
               <tbody id="tpMappingTable"></tbody>
             </table></div>
+            <div style="margin-top:16px;padding:12px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)">
+              <div style="font-weight:600;font-size:13px;margin-bottom:4px">📦 Package-Zuordnung</div>
+              <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Steht in der Meal-Spalte „wahr" / TRUE / ja / yes / 1 / x, bekommt der Spieler das Package <em>mit Meal</em> (inkl. „Event Meals gebucht"), sonst das Package <em>ohne Meal</em>. Preis kommt aus der Package-Verwaltung.</div>
+              <div class="form-grid">
+                <div class="form-group"><label>Meal-Spalte (TP)</label><select id="tpmap__meal_col" style="width:100%" onchange="tpReadPkgSelects(); if (tpLastRows) buildTpCandidates(tpLastRows);"></select></div>
+                <div class="form-group"><label>Package ohne Meal</label><select id="tpmap__pkg_no_meal" style="width:100%" onchange="tpReadPkgSelects(); if (tpLastRows) buildTpCandidates(tpLastRows);"></select></div>
+                <div class="form-group"><label>Package mit Meal</label><select id="tpmap__pkg_meal" style="width:100%" onchange="tpReadPkgSelects(); if (tpLastRows) buildTpCandidates(tpLastRows);"></select></div>
+              </div>
+            </div>
             <div style="margin-top:12px;display:flex;gap:10px">
               <button class="btn primary" onclick="saveTpMapping()">💾 Zuordnung speichern</button>
               <button class="btn" onclick="resetTpMapping()">Standard wiederherstellen</button>
@@ -3182,9 +3191,9 @@ dies ist unsere letzte Zahlungserinnerung..."></textarea></div>
           <div class="table-wrap"><table>
             <thead><tr>
               <th style="width:36px"><input type="checkbox" id="tpSelectAll" checked onchange="tpToggleAll(this.checked)" /></th>
-              <th>Name</th><th>Member ID</th><th>Land</th><th>Geschlecht</th><th>Geburtsdatum</th><th>Altersklasse</th><th>E-Mail</th><th>Mobil</th>
+              <th>Name</th><th>Member ID</th><th>Land</th><th>Geschlecht</th><th>Geburtsdatum</th><th>Altersklasse</th><th>Package</th><th>E-Mail</th><th>Mobil</th>
             </tr></thead>
-            <tbody id="tpPreviewTable"><tr><td colspan="9" class="loading">–</td></tr></tbody>
+            <tbody id="tpPreviewTable"><tr><td colspan="10" class="loading">–</td></tr></tbody>
           </table></div>
         </div>
 
@@ -13850,10 +13859,63 @@ var tpFileName = '';
 var tpDiscoveredColumns = [];
 var tpLastRows = null;
 
+// Zusatz-Einstellungen der Package-Zuordnung (werden im selben JSON gespeichert)
+var TP_PKG_KEYS = ['_meal_col', '_pkg_no_meal', '_pkg_meal'];
 function tpDefaultMapping() {
   var m = {};
   TP_IMPORT_TARGETS.forEach(function(t){ m[t.col] = t.tpDefault; });
+  m._meal_col = ''; m._pkg_no_meal = ''; m._pkg_meal = '';
   return m;
+}
+function tpIsTruthy(v) {
+  if (v === true) return true;
+  if (v == null || v === false) return false;
+  var s = String(v).trim().toLowerCase();
+  return ['wahr','true','ja','yes','y','1','x','✓','✔'].indexOf(s) !== -1;
+}
+function tpReadPkgSelects() {
+  TP_PKG_KEYS.forEach(function(k){ var el = document.getElementById('tpmap_' + k); if (el) tpMapping[k] = el.value; });
+}
+function tpGuessMealCol(cols) {
+  return cols.find(function(c){ return /meal/i.test(c); }) || '';
+}
+function renderTpPackageMapping() {
+  var cols = TP_COLUMNS.slice();
+  (tpDiscoveredColumns || []).forEach(function(c){ if (cols.indexOf(c) === -1) cols.push(c); });
+  // Meal-Spalte automatisch vorschlagen – bevorzugt aus der hochgeladenen Datei
+  if (!tpMapping._meal_col || (tpDiscoveredColumns.length && tpDiscoveredColumns.indexOf(tpMapping._meal_col) === -1)) {
+    var g = tpGuessMealCol(tpDiscoveredColumns || []) || (tpMapping._meal_col ? '' : tpGuessMealCol(cols));
+    if (g) tpMapping._meal_col = g;
+  }
+  function esc(c){ return String(c).replace(/"/g,'&quot;'); }
+  var mc = document.getElementById('tpmap__meal_col');
+  if (mc) mc.innerHTML = '<option value="">— keine Meal-Spalte —</option>' + cols.map(function(c){
+    return '<option value="' + esc(c) + '"' + (tpMapping._meal_col === c ? ' selected' : '') + '>' + c + '</option>'; }).join('');
+  ['_pkg_no_meal','_pkg_meal'].forEach(function(k){
+    var el = document.getElementById('tpmap_' + k); if (!el) return;
+    el.innerHTML = '<option value="">— kein Package setzen —</option>' + (packagesData || []).map(function(pk){
+      return '<option value="' + esc(pk.code) + '"' + (tpMapping[k] === pk.code ? ' selected' : '') + '>' + pk.code + (pk.name ? ' – ' + pk.name : '') + ' (' + fmt(parseFloat(pk.price) || 0) + ')</option>'; }).join('');
+  });
+}
+// Package + Preis + Mahlzeiten für einen TP-Datensatz bestimmen
+function tpPackageFields(raw) {
+  var withMeal = tpMapping._meal_col ? tpIsTruthy(raw[tpMapping._meal_col]) : false;
+  var code = withMeal ? tpMapping._pkg_meal : tpMapping._pkg_no_meal;
+  if (!code) return null;
+  var pkg = (packagesData || []).find(function(x){ return x.code === code; });
+  if (!pkg) return null;
+  var price = parseFloat(pkg.price) || 0;
+  var out = { package: pkg.code, package_price: price, total: price, meal_plus: withMeal ? 'Ja' : 'Nein' };
+  var allDays = ['mo','di','mi','do','fr','sa','so'];
+  var hasDays = pkg.pkg_breakfast_days || pkg.pkg_lunch_days || pkg.pkg_dinner_days;
+  ['breakfast','lunch','dinner'].forEach(function(meal){
+    var days = String(pkg['pkg_' + meal + '_days'] || '').split(',').map(function(d){ return d.trim(); }).filter(Boolean);
+    if (withMeal && pkg.meal_included === 'Ja' && !hasDays) days = allDays.slice();
+    if (!withMeal) days = [];
+    out['meal_' + meal] = days.length ? 'Ja' : 'Nein';
+    out['meal_' + meal + '_days'] = days.join(',');
+  });
+  return out;
 }
 
 async function initTpImportPage() {
@@ -13862,6 +13924,7 @@ async function initTpImportPage() {
   var info = document.getElementById('tpFileInfo'); if (info) { info.style.display='none'; info.textContent=''; }
   var pc = document.getElementById('tpPreviewCard'); if (pc) pc.style.display='none';
   await loadTpMapping();
+  try { await loadPackagesData(); } catch (e) { console.warn('Packages laden fehlgeschlagen', e); }
   renderTpMappingTable();
 }
 
@@ -13878,6 +13941,7 @@ async function loadTpMapping() {
     if (row && row.value) {
       var saved = JSON.parse(row.value);
       TP_IMPORT_TARGETS.forEach(function(t){ if (saved.hasOwnProperty(t.col)) tpMapping[t.col] = saved[t.col]; });
+      TP_PKG_KEYS.forEach(function(k){ if (saved.hasOwnProperty(k)) tpMapping[k] = saved[k]; });
     }
   } catch(e) { console.error('loadTpMapping error:', e); }
 }
@@ -13887,6 +13951,7 @@ async function saveTpMapping() {
     var sel = document.getElementById('tpmap_' + t.col);
     if (sel) tpMapping[t.col] = sel.value;
   });
+  tpReadPkgSelects();
   if (!currentEventId) { toast('⚠️ Bitte zuerst ein Event aktivieren'); return; }
   var key = 'tp_import_mapping_' + currentEventId;
   await db.from('app_settings').delete().eq('key', key);
@@ -13902,6 +13967,7 @@ function resetTpMapping() {
 }
 
 function renderTpMappingTable() {
+  renderTpPackageMapping();
   var tb = document.getElementById('tpMappingTable');
   if (!tb) return;
   var cols = TP_COLUMNS.slice();
@@ -14006,6 +14072,7 @@ function tpApplyTransform(target, value) {
 
 async function buildTpCandidates(rows) {
   TP_IMPORT_TARGETS.forEach(function(t){ var sel=document.getElementById('tpmap_'+t.col); if(sel) tpMapping[t.col]=sel.value; });
+  tpReadPkgSelects();
 
   var existing = new Set();
   try {
@@ -14033,6 +14100,8 @@ async function buildTpCandidates(rows) {
     if (midKey && existing.has(midKey)) { dupExisting++; return; }
     if (midKey && seenInFile.has(midKey)) { dupInFile++; return; }
     if (midKey) seenInFile.add(midKey);
+    var pk = tpPackageFields(raw);
+    if (pk) Object.assign(rec, pk);
     candidates.push(rec);
   });
 
@@ -14060,7 +14129,7 @@ function renderTpPreview(dupExisting) {
   if (badge) badge.textContent = tpCandidates.length;
   if (dupInfo) dupInfo.textContent = dupExisting ? (dupExisting + ' Dublette(n) übersprungen') : '';
   if (!tpCandidates.length) {
-    body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:20px">Keine neuen Teilnehmer zum Importieren (alle bereits vorhanden oder keine Zuordnung).</td></tr>';
+    body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text3);padding:20px">Keine neuen Teilnehmer zum Importieren (alle bereits vorhanden oder keine Zuordnung).</td></tr>';
     return;
   }
   body.innerHTML = tpCandidates.map(function(c, i){
@@ -14073,6 +14142,7 @@ function renderTpPreview(dupExisting) {
       + '<td>' + tpEsc(c.gender) + '</td>'
       + '<td>' + tpEsc(c.dob) + '</td>'
       + '<td>' + tpEsc(c.events) + '</td>'
+      + '<td>' + (c.package ? '<strong>' + tpEsc(c.package) + '</strong>' + (c.meal_plus === 'Ja' ? ' 🍽' : '') + ' <span style="font-size:11px;color:var(--text3)">' + fmt(c.package_price || 0) + '</span>' : '<span style="color:var(--text3)">–</span>') + '</td>'
       + '<td>' + tpEsc(c.email) + '</td>'
       + '<td>' + tpEsc(c.mobile) + '</td>'
       + '</tr>';
