@@ -325,42 +325,24 @@
     btn.disabled = true;
     btn.textContent = t('submitting');
 
-    // Try to find a matching participant to link + auto-flag as tournament withdraw
-    var participantId = null;
-    try {
-      var pq = db.from('participants').select('id').eq('lastname', lastname).eq('firstname', firstname);
-      if (esid) pq = pq.eq('member_id', esid);
-      if (eventId) pq = pq.eq('event_id', eventId);
-      var pr = await pq.limit(1);
-      if (pr.data && pr.data.length) participantId = pr.data[0].id;
-    } catch (e) { /* ignore matching errors, still record submission */ }
-
+    // Sicherheit: Zuordnung zum Teilnehmer, Eintrag des Rücktritts und Markierung beim
+    // Teilnehmer laufen in einer abgesicherten Datenbank-Funktion (kein Tabellenzugriff).
     var row = {
       event_id: eventId || null,
-      participant_id: participantId,
       lastname: lastname, firstname: firstname, esid: esid || null,
       mobile: normalizedMobile, email: email,
       reason: reason,
-      reason_other: reason === 'Other' ? reasonOther : (details || null),
-      confirmed: true
+      reason_other: reason === 'Other' ? reasonOther : (details || null)
     };
-
-    var ins = await db.from('tournament_withdrawals').insert(row);
+    var ins = await db.rpc('pub_tournament_withdraw', {
+      p_row: row,
+      p_participant_reason: reason === 'Other' ? reasonOther : (details || reason)
+    });
     if (ins.error) {
       btn.disabled = false;
       btn.textContent = t('submit_btn');
       showError(t('err_generic').replace('{msg}', ins.error.message));
       return;
-    }
-
-    if (participantId) {
-      await db.from('participants').update({
-        tournament_withdraw: 'Ja',
-        tournament_withdraw_reason_code: reason,
-        tournament_withdraw_reason: reason === 'Other' ? reasonOther : (details || reason),
-        tournament_withdraw_at: new Date().toISOString(),
-        tournament_withdraw_source: 'form'
-      }).eq('id', participantId);
     }
 
     document.getElementById('successBox').innerHTML =

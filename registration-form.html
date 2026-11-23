@@ -954,16 +954,16 @@ async function init() {
   // neue anzulegen. Der Token wird beim ersten Absenden erzeugt und per E-Mail verschickt.
   var editParam = params.get('edit');
   if (editParam) {
-    var editR = await db.from('participants').select('*').eq('edit_token', editParam).eq('event_id', eventId).maybeSingle();
+    // Sicherheit: Laden über abgesicherte Datenbank-Funktion – liefert nur die Anmeldung
+    // mit genau diesem Bearbeitungs-Token (kein direkter Tabellenzugriff mehr).
+    var editRpc = await db.rpc('pub_get_registration', { p_token: editParam, p_event: String(eventId) });
+    var editR = { data: (editRpc.data && editRpc.data.length) ? editRpc.data[0] : null };
     if (editR.data) {
       // Endorsement abgelehnt → Zugang über den Änderungslink sperren und Hinweis zeigen.
       var _rej = editR.data.endorsement_status === 'rejected';
       var _rejReason = editR.data.endorsement_reason || '';
-      if (!_rej && editR.data.member_id) {
-        try {
-          var _pr = await db.from('persons').select('endorsement_status,endorsement_reason').eq('member_id', editR.data.member_id).maybeSingle();
-          if (_pr.data && _pr.data.endorsement_status === 'rejected') { _rej = true; _rejReason = _rejReason || _pr.data.endorsement_reason || ''; }
-        } catch (e) {}
+      if (!_rej && editR.data._person_endorsement_status === 'rejected') {
+        _rej = true; _rejReason = _rejReason || editR.data._person_endorsement_reason || '';
       }
       if (_rej) { showEndorsementRejection(_rejReason); return; }
 
@@ -1043,23 +1043,22 @@ function clearPhotoSelection() {
 
 // Lädt das gewählte Foto hoch und schreibt die URL in participants.photo_url.
 // Wird nach dem Insert/Update aufgerufen, damit die participant-ID als Pfad dient.
-async function uploadParticipantPhoto(participantId) {
+async function uploadParticipantPhoto(participantId, token) {
   var inp = document.getElementById('r_photo');
   var hasFile = inp && inp.files && inp.files[0];
   if (!hasFile && !photoRemoved) return;
   try {
     if (photoRemoved && !hasFile) {
-      await db.from('participants').update({ photo_url: null }).eq('id', participantId);
+      await db.rpc('pub_update_participant', { p_id: participantId, p_token: token, p_row: { photo_url: null } });
       return;
     }
     var blob = await compressPhotoFile(inp.files[0], 800, 0.85);
-    var path = participantId + '/photo.jpg';
-    var up = await db.storage.from('person-media').upload(path, blob, { upsert: true, contentType: 'image/jpeg' });
-    if (up.error) return;
+    // Sicherheit: jede Datei bekommt einen eindeutigen Namen (kein Überschreiben nötig)
+    var path = participantId + '/photo_' + Date.now() + '.jpg';
+    var up = await db.storage.from('person-media').upload(path, blob, { upsert: false, contentType: 'image/jpeg' });
+    if (up.error) { console.warn('Foto-Upload fehlgeschlagen:', up.error.message); return; }
     var pub = db.storage.from('person-media').getPublicUrl(path);
-    // Cache-Buster, damit ein ausgetauschtes Foto sofort neu geladen wird
-    var url = pub.data.publicUrl + '?v=' + Date.now();
-    await db.from('participants').update({ photo_url: url }).eq('id', participantId);
+    await db.rpc('pub_update_participant', { p_id: participantId, p_token: token, p_row: { photo_url: pub.data.publicUrl } });
   } catch (e) { /* Upload-Fehler blockieren die Anmeldung nicht */ }
 }
 
@@ -1285,7 +1284,8 @@ async function loadRoomAvailability() {
       if (roomCapacity[room.room_type] !== undefined) roomCapacity[room.room_type]++;
     });
 
-    var pr = await db.from('participants').select('room_type,room_number').eq('event_id', eventId).neq('withdraw', 'Ja').not('room_type', 'is', null).neq('room_type', 'Warteliste');
+    // Sicherheit: nur Zimmertyp/-nummer über abgesicherte Funktion, keine Teilnehmerdaten
+    var pr = await db.rpc('pub_room_occupancy', { p_event: String(eventId) });
     (pr.data || []).forEach(function(p) {
       if (assignedRoomNumbers[p.room_type] === undefined) return;
       if (p.room_number) assignedRoomNumbers[p.room_type].add(p.room_number);
@@ -2048,17 +2048,25 @@ async function submitRegistration() {
   var esid = row.member_id;
   var dupInfo = null;
   if (esid && !editingParticipantId) {
-    var dupQ = await db.from('participants').select('id,firstname,lastname').eq('member_id', esid).eq('event_id', eventId);
+    // Sicherheit: liefert nur, OB die ESID schon angemeldet ist – keine fremden Namen
+    var dupQ = await db.rpc('pub_existing_esids', { p_event: String(eventId), p_esids: [String(esid)] });
     if (dupQ.data && dupQ.data.length > 0) {
-      dupInfo = dupQ.data[0];
+      dupInfo = { firstname: v('r_firstname'), lastname: v('r_lastname') };
       var dupNote = t('note_esid_pending_review');
       row.memo = row.memo ? (dupNote + ' | ' + row.memo) : dupNote;
     }
   }
 
-  var r = editingParticipantId
-    ? await db.from('participants').update(row).eq('id', editingParticipantId).select().single()
-    : await db.from('participants').insert(row).select().single();
+  // Sicherheit: Speichern über abgesicherte Funktionen (Änderung nur mit Bearbeitungs-Token)
+  var r;
+  if (editingParticipantId) {
+    var _upd = await db.rpc('pub_update_participant', { p_id: editingParticipantId, p_token: editToken, p_row: row });
+    r = _upd.error ? { error: _upd.error } : (_upd.data ? { data: _upd.data } : { error: { message: 'Bearbeitungs-Link ungültig' } });
+  } else {
+    var _ins = await db.rpc('pub_insert_participants', { p_rows: [row] });
+    r = _ins.error ? { error: _ins.error } : { data: (_ins.data || [])[0] };
+  }
+  var tokenForWrites = editToken || row.edit_token;
   if (r.error) {
     btn.disabled = false;
     btn.textContent = t('submit_btn');
@@ -2071,18 +2079,18 @@ async function submitRegistration() {
   // Optionaler Passfoto-Upload (nur wenn Confirmation Letter benötigt wird und eine Datei
   // gewählt wurde). Läuft nach dem Insert, damit die neue participant-ID als Speicherpfad
   // genutzt werden kann — genau wie im Admin-Tool bei der Personendatenbank.
-  await uploadParticipantPhoto(r.data.id);
+  await uploadParticipantPhoto(r.data.id, tokenForWrites);
 
   var passportFileInput = document.getElementById('r_passport_photo');
   if (needsLetter && passportFileInput && passportFileInput.files && passportFileInput.files[0]) {
     try {
       var file = passportFileInput.files[0];
       var ext = file.type === 'application/pdf' ? 'pdf' : 'jpg';
-      var path = r.data.id + '/passport.' + ext;
-      var up = await db.storage.from('person-media').upload(path, file, { upsert: true, contentType: file.type });
+      var path = r.data.id + '/passport_' + Date.now() + '.' + ext;
+      var up = await db.storage.from('person-media').upload(path, file, { upsert: false, contentType: file.type });
       if (!up.error) {
         var pub = db.storage.from('person-media').getPublicUrl(path);
-        await db.from('participants').update({ passport_doc_url: pub.data.publicUrl }).eq('id', r.data.id);
+        await db.rpc('pub_update_participant', { p_id: r.data.id, p_token: tokenForWrites, p_row: { passport_doc_url: pub.data.publicUrl } });
       }
     } catch (e) { /* Upload-Fehler blockieren die Registrierung nicht, still ignorieren */ }
   }

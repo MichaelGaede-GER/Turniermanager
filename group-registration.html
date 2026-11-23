@@ -777,7 +777,9 @@ async function init() {
   // und per E-Mail an jede Person der Gruppe verschickt.
   var editParam = params.get('edit');
   if (editParam) {
-    var editR = await db.from('participants').select('*').eq('edit_token', editParam).eq('event_id', eventId).order('created_at');
+    // Sicherheit: Laden über abgesicherte Funktion – nur die Datensätze mit diesem Token
+    var editRpc = await db.rpc('pub_get_registration', { p_token: editParam, p_event: String(eventId) });
+    var editR = { data: editRpc.data || [] };
     if (editR.data && editR.data.length) {
       groupEditMode = true;
       groupEditToken = editParam;
@@ -865,11 +867,12 @@ async function uploadGroupParticipantPhoto(id, participantId) {
   if (!inp || !inp.files || !inp.files[0]) return existingGroupPhotoUrl[id] || null;
   try {
     var blob = await compressPhotoFile(inp.files[0], 800, 0.85);
-    var path = participantId + '/photo.jpg';
-    var up = await db.storage.from('person-media').upload(path, blob, { upsert: true, contentType: 'image/jpeg' });
-    if (up.error) return existingGroupPhotoUrl[id] || null;
+    // Sicherheit: eindeutiger Dateiname, kein Überschreiben nötig
+    var path = participantId + '/photo_' + Date.now() + '.jpg';
+    var up = await db.storage.from('person-media').upload(path, blob, { upsert: false, contentType: 'image/jpeg' });
+    if (up.error) { console.warn('Foto-Upload fehlgeschlagen:', up.error.message); return existingGroupPhotoUrl[id] || null; }
     var pub = db.storage.from('person-media').getPublicUrl(path);
-    return pub.data.publicUrl + '?v=' + Date.now();
+    return pub.data.publicUrl;
   } catch (e) { return existingGroupPhotoUrl[id] || null; }
 }
 
@@ -882,13 +885,14 @@ var groupLeaderColumnsAvailable = false;
 var roomShareColumnAvailable = false;
 
 async function checkGroupLeaderColumns() {
+  // Sicherheit: Spalten-Prüfung über Funktion statt Lesezugriff auf Teilnehmerdaten
   try {
-    var probe = await db.from('participants').select('group_leader_email').limit(1);
-    groupLeaderColumnsAvailable = !probe.error;
+    var probe = await db.rpc('pub_participant_has_column', { p_col: 'group_leader_email' });
+    groupLeaderColumnsAvailable = !probe.error && probe.data === true;
   } catch (e) { groupLeaderColumnsAvailable = false; }
   try {
-    var probe2 = await db.from('participants').select('room_share_with').limit(1);
-    roomShareColumnAvailable = !probe2.error;
+    var probe2 = await db.rpc('pub_participant_has_column', { p_col: 'room_share_with' });
+    roomShareColumnAvailable = !probe2.error && probe2.data === true;
   } catch (e) { roomShareColumnAvailable = false; }
 }
 
@@ -1214,8 +1218,8 @@ async function loadRoomAvailability() {
       if (roomCapacity[room.room_type] !== undefined) roomCapacity[room.room_type]++;
     });
 
-    var pq = db.from('participants').select('room_type,room_number').eq('event_id', eventId).neq('withdraw', 'Ja').not('room_type', 'is', null).neq('room_type', 'Warteliste');
-    var pr = await pq;
+    // Sicherheit: nur Zimmertyp/-nummer über abgesicherte Funktion, keine Teilnehmerdaten
+    var pr = await db.rpc('pub_room_occupancy', { p_event: String(eventId) });
     (pr.data || []).forEach(function(p) {
       if (assignedRoomNumbers[p.room_type] === undefined) return;
       if (p.room_number) assignedRoomNumbers[p.room_type].add(p.room_number);
@@ -2321,8 +2325,8 @@ async function submitGroupRegistration() {
       try {
         var pFile = passportFileInput.files[0];
         var pExt = pFile.type === 'application/pdf' ? 'pdf' : 'jpg';
-        var pPath = participantId + '/passport.' + pExt;
-        var pUp = await db.storage.from('person-media').upload(pPath, pFile, { upsert: true, contentType: pFile.type });
+        var pPath = participantId + '/passport_' + Date.now() + '.' + pExt;
+        var pUp = await db.storage.from('person-media').upload(pPath, pFile, { upsert: false, contentType: pFile.type });
         if (!pUp.error) {
           var pPub = db.storage.from('person-media').getPublicUrl(pPath);
           passportDocUrl = pPub.data.publicUrl;
@@ -2438,10 +2442,12 @@ async function submitGroupRegistration() {
   // can review and merge them (e.g. adding flight data or upgrading a package).
   // Im Edit-Modus übersprungen, da die Personen ja bereits mit genau diesen ESIDs erfasst sind.
   if (!groupEditMode) {
-    var dupQ = await db.from('participants').select('member_id,firstname,lastname').in('member_id', esidsInGroup).eq('event_id', eventId);
+    // Sicherheit: liefert nur die bereits angemeldeten ESIDs, keine fremden Namen
+    var dupQ = await db.rpc('pub_existing_esids', { p_event: String(eventId), p_esids: esidsInGroup.map(String) });
     var dupEsidSet = {};
-    (dupQ.data || []).forEach(function(d) { dupEsidSet[d.member_id] = true; });
-    var dupNames = (dupQ.data || []).map(function(d) { return d.member_id + ' (' + d.firstname + ' ' + d.lastname + ')'; });
+    (dupQ.data || []).forEach(function(m) { dupEsidSet[m] = true; });
+    var dupNames = rows.filter(function(row) { return row.member_id && dupEsidSet[row.member_id]; })
+      .map(function(row) { return row.member_id + ' (' + (row.firstname || '') + ' ' + (row.lastname || '') + ')'; });
     if (dupNames.length) {
       rows.forEach(function(row) {
         if (row.member_id && dupEsidSet[row.member_id]) {
@@ -2482,12 +2488,13 @@ async function submitGroupRegistration() {
     for (var _ui = 0; _ui < rows.length; _ui++) {
       var rowCopy = Object.assign({}, rows[_ui]);
       var rowId = rowCopy.id; delete rowCopy.id;
-      var ur = await db.from('participants').update(rowCopy).eq('id', rowId);
+      var ur = await db.rpc('pub_update_participant', { p_id: rowId, p_token: groupEditToken, p_row: rowCopy });
       if (ur.error) updateErrors.push(ur.error.message);
     }
     r = updateErrors.length ? { error: { message: updateErrors.join('; ') } } : { data: rows };
   } else {
-    r = await db.from('participants').insert(rows).select();
+    // Sicherheit: Anlegen über abgesicherte Funktion
+    r = await db.rpc('pub_insert_participants', { p_rows: rows });
   }
   if (r.error) {
     btn.disabled = false; btn.textContent = t('submit_btn');

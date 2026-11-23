@@ -400,17 +400,15 @@ async function init() {
   var id = params.get('id');
   if (!id) { showError(t('no_pass_id')); return; }
 
-  var pr = await db.from('participants').select('*').eq('id', id).single();
+  // Sicherheit: abgesicherte Funktion liefert nur die Felder, die der Pass anzeigt
+  // (inkl. Foto-Fallback aus der Personendatenbank und QR-Token).
+  var pr = await db.rpc('pub_get_pass', { p_id: id });
   var p = pr.data;
   if (!p) { showError(t('pass_not_found')); return; }
   currentParticipant = p;
 
   // Photo — falls back to a gender-matched dummy photo if none is on file
   var photoSrc = p.photo_url || '';
-  if (!photoSrc && p.member_id) {
-    var pr2 = await db.from('persons').select('photo_url').eq('member_id', p.member_id).maybeSingle();
-    if (pr2.data && pr2.data.photo_url) photoSrc = pr2.data.photo_url;
-  }
   if (!photoSrc) {
     photoSrc = (p.gender === 'Weiblich') ? FEMALE_DUMMY : MALE_DUMMY;
   }
@@ -472,25 +470,8 @@ async function init() {
   // QR code (encodes the ESID, scanned the same way as the printed pass)
   // QR code (encodes a random, non-guessable per-person token instead of the ESID, which
   // follows a predictable pattern and could otherwise be faked by someone else)
-  var qrToken = p.qr_token;
-  if (!qrToken) {
-    // Diese Person hat noch keinen sicheren Token — jetzt einen erzeugen und speichern,
-    // damit ab sofort nicht mehr die erratbare ESID im QR-Code landet.
-    try {
-      var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*-_';
-      var bytes = new Uint8Array(18);
-      (window.crypto || window.msCrypto).getRandomValues(bytes);
-      qrToken = '';
-      for (var qi = 0; qi < bytes.length; qi++) qrToken += chars[bytes[qi] % chars.length];
-      await db.from('participants').update({ qr_token: qrToken }).eq('id', p.id);
-      if (p.member_id) {
-        var personR = await db.from('persons').select('id,qr_token').eq('member_id', p.member_id).maybeSingle();
-        if (personR.data && !personR.data.qr_token) {
-          await db.from('persons').update({ qr_token: qrToken }).eq('id', personR.data.id);
-        }
-      }
-    } catch (e) { qrToken = p.member_id || p.id; }
-  }
+  // QR-Token wird bei Bedarf bereits in pub_get_pass erzeugt und gespeichert.
+  var qrToken = p.qr_token || p.member_id || p.id;
   var qrData = encodeURIComponent(qrToken);
   document.getElementById('qrImg').src = 'https://api.qrserver.com/v1/create-qr-code/?size=380x380&data=' + qrData;
 
