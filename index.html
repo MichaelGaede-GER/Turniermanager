@@ -1360,6 +1360,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
                   </div>
                   <input type="file" id="entryPassportDocInput" accept="image/*,.pdf" style="display:none" onchange="previewEntryPassportDoc(event)" />
                   <div style="display:flex;flex-direction:column;gap:6px">
+                    <button class="btn primary" style="font-size:11px;padding:4px 10px" onclick="viewDocFile(entryPassportFile, entryCurrentPassportUrl)">🔍 Ansehen</button>
                     <button class="btn" style="font-size:11px;padding:4px 10px" onclick="document.getElementById('entryPassportDocInput').click()">Datei auswählen</button>
                     <button class="btn danger" id="entryPassportDeleteBtn" style="font-size:11px;padding:4px 10px;display:none" onclick="deleteEntryPassportDoc()">Datei löschen</button>
                   </div>
@@ -3733,6 +3734,7 @@ dies ist unsere letzte Zahlungserinnerung..."></textarea></div>
             <span style="font-size:11px;color:var(--text3)">PDF oder Bild</span>
           </div>
           <input type="file" id="personPassportDocInput" accept="image/*,.pdf" style="display:none" onchange="previewPersonPassportDoc(event)" />
+          <button class="btn primary" style="font-size:11px;padding:4px 10px;width:100%;margin-bottom:6px" onclick="viewDocFile(personPassportFile, personCurrentPassportUrl)">🔍 Ansehen</button>
           <button class="btn" style="font-size:11px;padding:4px 10px;width:100%" onclick="document.getElementById('personPassportDocInput').click()">Datei auswählen</button>
           <button class="btn danger" id="personPassportDeleteBtn" style="font-size:11px;padding:4px 10px;width:100%;margin-top:6px;display:none" onclick="deletePersonPassportDoc()">Datei löschen</button>
         </div>
@@ -13676,6 +13678,17 @@ function hydratePrivateDocs(root) {
 })();
 // Für window.open(...) mit einer Referenz
 async function openPrivateDoc(ref) { var u = await signedDocUrl(ref); if (u) window.open(u, '_blank'); }
+// "🔍 Ansehen": öffnet Pass/Ausweis groß in einem neuen Tab. Das Fenster wird sofort
+// geöffnet (sonst blockiert der Popup-Blocker) und danach mit dem kurz gültigen Link gefüllt.
+async function viewDocFile(localFile, ref) {
+  if (!localFile && !ref) { toast('Kein Dokument hinterlegt'); return; }
+  var w = window.open('', '_blank');
+  if (!w) { toast('Popup blockiert – bitte Popups für diese Seite erlauben'); return; }
+  try { w.document.write('<p style="font-family:sans-serif;padding:20px">Dokument wird geladen …</p>'); } catch (e) {}
+  var url = localFile ? URL.createObjectURL(localFile) : await signedDocUrl(ref);
+  if (!url) { w.close(); toast('Dokument konnte nicht geladen werden'); return; }
+  w.location.href = url;
+}
 
 async function uploadPersonMediaFile(path, blobOrFile, contentType) {
   var up = await db.storage.from('person-media').upload(path, blobOrFile, {
