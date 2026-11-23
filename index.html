@@ -342,7 +342,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
       <div class="brand">MG Sports EM</div>
       <div class="sub" data-i18n="sidebar_sub">Turnierverwaltung 2026</div>
       <!-- Wird bei jedem Push automatisch per GitHub Action (.github/workflows/version.yml) gesetzt – nicht von Hand aendern -->
-      <div class="app-version" id="appVersion" title="Version 1.0.310 · Commit 3835930 · 24.11.2026 00:45"><!--APP_VERSION-->v1.0.310 · 24.11.2026 00:45<!--/APP_VERSION--></div>
+      <div class="app-version" id="appVersion" title="Version 1.0.309 · Commit 7c9dbb4 · 24.11.2026 00:28"><!--APP_VERSION-->v1.0.309 · 24.11.2026 00:28<!--/APP_VERSION--></div>
       <span class="role-badge" id="roleBadge">Admin</span>
     </div>
     <div class="nav-section" data-i18n="nav_section_overview">Übersicht</div>
@@ -4855,12 +4855,20 @@ async function doLogin() {
 }
 
 async function doLogout() {
+  _appInitDone = false;
   await db.auth.signOut();
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('appShell').style.display = 'none';
 }
 
+// initApp darf pro Anmeldung nur EINMAL laufen. Supabase meldet beim Zurückwechseln in den
+// Browser-Tab bzw. beim automatischen Token-Erneuern erneut ein Login-Ereignis – früher lief
+// dann initApp() noch einmal und setzte u.a. im offenen Teilnehmerformular Foto, Mahlzeiten,
+// Transport usw. zurück (wurde danach gespeichert, gingen diese Angaben verloren).
+var _appInitDone = false;
 async function initApp() {
+  if (_appInitDone) return;
+  _appInitDone = true;
   applyTranslations();
   // 1. Load event ID first - critical for all queries
   await loadActiveEvent();
