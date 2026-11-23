@@ -879,7 +879,7 @@ tr:hover td{background:var(--bg2)}tr:nth-child(even) td{background:rgba(255,255,
             <div class="form-grid">
               <div class="form-group"><label>Package</label><select id="f_package" onchange="updatePackagePrice(); applyPackageMealDays(this.value);"><option value="">– wählen –</option></select></div>
               <div class="form-group"><label>Package-Preis (€)</label><input type="number" id="f_package_price" placeholder="0.00" step="0.01" onchange="calcTotal()" /></div>
-              <div class="form-group"><label>Entry Fee / Meldegebühr (€)</label><input type="number" id="f_entry_fee" placeholder="0.00" step="0.01" oninput="calcTotal()" onchange="calcTotal()" /></div>
+              <!-- Feld "Entry Fee / Meldegebühr" entfernt: die Meldegebühr ist im Package-Preis enthalten -->
 
               <div class="form-group" style="grid-column:1/-1"><label>Memo / Notiz</label><textarea id="f_memo" placeholder="Interne Anmerkung…"></textarea></div>
             </div>
@@ -4687,7 +4687,7 @@ create table if not exists participants (
   group_tp text, lastname text not null, firstname text not null,
   country text, mobile text, email text, dob date, passport_id text,
   gender text, member_id text, role text, events text,
-  package text, package_price numeric(10,2), entry_fee numeric(10,2) default 90,
+  package text, package_price numeric(10,2), entry_fee numeric(10,2) default 0,
   shirt text, coach_name text, coach_esid text,
   payment_status text default 'Neu', amount_received numeric(10,2) default 0,
   payment_date date, total numeric(10,2) default 0, payment_link text,
@@ -6510,7 +6510,6 @@ async function sendParticipantConfirmation(id) {
   _sec(_hasHotel ? 'Package & Hotel' : 'Package');
   _add('Package', p.package);
   _add('Package Price', (p.package_price != null && p.package_price !== '') ? Number(p.package_price).toFixed(2) + ' EUR' : null);
-  _add('Entry Fee', (parseFloat(p.entry_fee) || 0) > 0 ? Number(p.entry_fee).toFixed(2) + ' EUR' : null);
   _add('Room Type', p.room_type);
   _add('Room Number', p.room_number);
   _add('Hotel', p.hotel);
@@ -7128,7 +7127,7 @@ function getFormTotalParts() {
   var needsVisa = visa && visa !== 'Nicht erforderlich';
   var parts = {
     pkg: num('f_package_price'),
-    entry: num('f_entry_fee'),
+    entry: 0, // Meldegebühr ist im Package-Preis enthalten – wird nicht mehr separat addiert
     meal: num('f_meal_option_price'),
     letter: (document.getElementById('f_confirmation_letter_type') || {}).value ? num('f_confirmation_letter_price') : 0,
     visaExp: (needsVisa && isExpress) ? (visaExpressFee || 0) : 0
@@ -7142,7 +7141,8 @@ function computeParticipantTotal(p) {
   var needsVisa = p.visa && p.visa !== 'Nicht erforderlich';
   var visaExp = (needsVisa && p.express === 'Ja') ? (visaExpressFee || 0) : 0;
   var letter = p.confirmation_letter_type ? num(p.confirmation_letter_price) : 0;
-  return num(p.package_price) + num(p.entry_fee) + num(p.meal_option_price) + letter + visaExp;
+  // entry_fee wird bewusst ignoriert (Meldegebühr steckt im Package-Preis)
+  return num(p.package_price) + num(p.meal_option_price) + letter + visaExp;
 }
 
 function calcTotal() {
@@ -7403,7 +7403,7 @@ async function editEntry(id) {
   setTimeout(updateVisaFee, 100);
   setTimeout(updateLetterBanner, 120);
   document.getElementById('f_package_price').value = p.package_price||'';
-  var _efEl = document.getElementById('f_entry_fee'); if (_efEl) _efEl.value = (p.entry_fee != null && p.entry_fee !== '') ? p.entry_fee : '';
+  /* f_entry_fee entfernt – Meldegebühr ist im Package-Preis enthalten */
   const shirtQtyEl2 = document.getElementById('f_shirt_qty'); if (shirtQtyEl2) shirtQtyEl2.value = p.shirt_qty||1;
 
   document.getElementById('f_amount_received').value = p.amount_received||'';
@@ -7561,7 +7561,7 @@ async function saveEntry() {
     endorsement_notes: v('endorsement_notes')||null, endorsement_pdf_url: v('endorsement_pdf_url')||null,
     endorsement_reason: v('endorsement_reason')||null,
     verein: v('verein'), bundesland: v('bundesland'),
-    package: v('package'), package_price: n('package_price'), entry_fee: n('entry_fee'),
+    package: v('package'), package_price: n('package_price'), entry_fee: 0,
     shirt: v('shirt'), shirt_color: v('shirt_color'), shirt_qty: parseInt(document.getElementById('f_shirt_qty')?.value)||1, coach_name: v('coach_name'), coach_esid: v('coach_esid'), placement: getPlacementValue(),
     payment_status: computedPaymentStatus, amount_received: n('amount_received'),
     payment_date: computedPaymentDate, total: n('total'),
@@ -9824,7 +9824,7 @@ function searchInvoiceParticipants(query) {
 }
 
 function addParticipantToInvoice(p) {
-  var amount = parseFloat(p.total) || (parseFloat(p.package_price)||0) + (parseFloat(p.entry_fee)||0);
+  var amount = parseFloat(p.total) || (parseFloat(p.package_price)||0);
   currentInvoiceItems.push({
     description: p.lastname + ', ' + p.firstname + (p.package ? ' — Package ' + p.package : ''),
     participant_id: p.id,
@@ -9847,7 +9847,7 @@ async function addGroupToInvoice() {
   var added = 0;
   (r.data||[]).forEach(function(p) {
     if (already.indexOf(p.id) >= 0) return; // avoid duplicates
-    var amount = parseFloat(p.total) || (parseFloat(p.package_price)||0) + (parseFloat(p.entry_fee)||0);
+    var amount = parseFloat(p.total) || (parseFloat(p.package_price)||0);
     currentInvoiceItems.push({
       description: p.lastname + ', ' + p.firstname + (p.package ? ' — Package ' + p.package : ''),
       participant_id: p.id,
@@ -17034,7 +17034,7 @@ function downloadParticipantTemplate() {
     group_tp:'DE-001', lastname:'Mueller', firstname:'Thomas', country:'GER',
     mobile:'+49 151 12345678', email:'thomas@example.com', dob:'2010-03-15',
     passport_id:'C01234567', gender:'Männlich', member_id:'ESID-001', role:'Player',
-    events:'BU15', package:'B', package_price:'505.00', entry_fee:'90.00',
+    events:'BU15', package:'B', package_price:'505.00', entry_fee:'0.00',
     shirt:'M', shirt_color:'Blau', shirt_qty:'1',
     coach_name:'Schmidt, Karl', coach_esid:'COACH-001',
     payment_status:'Ausstehend', amount_received:'0', payment_date:'', total:'595.00',
