@@ -449,7 +449,22 @@ async function init() {
   if (p.package) {
     var pkgR = await db.from('packages').select('*').eq('code', p.package).maybeSingle();
     pkg = pkgR.data;
-    document.getElementById('pPackage').textContent = (pkg && pkg.short_code) ? pkg.short_code : p.package;
+    var _pkgLabel = (pkg && pkg.short_code) ? pkg.short_code : p.package;
+    // Meal im Package inkludiert, bei der Person aber abgewählt → Kürzel ohne Meal
+    // (bzw. Meal-Teil automatisch aus dem Kürzel entfernen, wenn kein Kürzel ohne Meal gepflegt ist).
+    if (pkg && pkg.meal_included === 'Ja' && p.meal_plus !== 'Ja') {
+      if (pkg.short_code_no_meal) {
+        _pkgLabel = pkg.short_code_no_meal;
+      } else {
+        var _mealRe = /\b(meals?|verpflegung|mahlzeiten|essen|board|vollpension|halbpension|breakfast|lunch|dinner|fr(ü|ue)hst(ü|ue)ck|mittagessen|abendessen)\b/i;
+        var _parts = String(_pkgLabel).split('/');
+        if (_parts.length > 1) {
+          var _kept = _parts.filter(function(seg){ return !_mealRe.test(seg); });
+          if (_kept.length && _kept.length < _parts.length) _pkgLabel = _kept.map(function(seg){ return seg.trim(); }).filter(Boolean).join(' / ');
+        }
+      }
+    }
+    document.getElementById('pPackage').textContent = _pkgLabel;
   }
 
   // Age category / events

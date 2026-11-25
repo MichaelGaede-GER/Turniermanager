@@ -4631,6 +4631,7 @@ MG Sports Event Management</textarea>
     <div class="form-grid two" style="gap:12px">
       <div class="form-group"><label>Code *</label><input type="text" id="pkgCode" placeholder="z.B. A" /></div>
       <div class="form-group"><label>Kürzel (Anzeige auf Ausweis/Liste)</label><input type="text" id="pkgShortCode" placeholder="z.B. A (leer = Code wird genutzt)" /></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Kürzel ohne Meal <span style="font-size:11px;color:var(--text3)">(wird angezeigt, wenn bei der Person „Event Meals gebucht“ aus ist; leer = Meal-Teil wird automatisch aus dem Kürzel entfernt)</span></label><input type="text" id="pkgShortCodeNoMeal" placeholder="z.B. C6 - Double Room / 6 nights / transport" /></div>
       <div class="form-group"><label>Kategorie *</label><input type="text" id="pkgCategory" placeholder="z.B. Player" /></div>
       <div class="form-group"><label>Nächte</label><input type="number" id="pkgNights" placeholder="3" min="0" /></div>
       <div class="form-group"><label>Zimmer</label><select id="pkgRoom"><option value="">–</option><option>Einzelzimmer</option><option>Doppelzimmer</option><option>Dreibettzimmer</option><option>Nicht inbegriffen</option></select></div>
@@ -7002,7 +7003,7 @@ async function loadParticipants() {
     if (p.departure_date) icons.push('🛫');
     var iconsHtml = icons.length ? '<span style="font-size:14px;margin-left:4px;display:inline-flex;gap:2px;align-items:center">' + icons.join('') + '</span>' : '';
     var pkgDataRow = packagesData && packagesData.find(function(pd){ return pd.code === p.package; });
-    var pkgDisplayCodeRow = pkgDataRow && pkgDataRow.short_code ? pkgDataRow.short_code : p.package;
+    var pkgDisplayCodeRow = getPackageDisplayLabel(p, pkgDataRow);
     var pb = p.package
       ? '<span style="display:inline-flex;align-items:center;gap:0;white-space:nowrap"><span class="badge">' + pkgDisplayCodeRow + '</span>' + iconsHtml + '</span>'
       : '-';
@@ -7805,6 +7806,28 @@ function v(id) { const el = document.getElementById('f_'+id); return el ? el.val
 function n(id) { const el = document.getElementById('f_'+id); return el ? (parseFloat(el.value)||0) : 0; }
 
 // PACKAGES
+// Anzeige-Kürzel eines Packages für eine konkrete Person.
+// Hat das Package Meals inkludiert, die Person aber „Event Meals gebucht“ = aus, wird
+// short_code_no_meal verwendet; ist das leer, wird der Meal-Teil automatisch aus dem
+// Kürzel entfernt (Rückfall). Ohne Kürzel wird der Package-Code genutzt.
+var PKG_MEAL_SEGMENT_RE = /\b(meals?|verpflegung|mahlzeiten|essen|board|vollpension|halbpension|breakfast|lunch|dinner|fr(ü|ue)hst(ü|ue)ck|mittagessen|abendessen)\b/i;
+function stripMealFromPackageLabel(label) {
+  if (!label) return label;
+  var parts = String(label).split('/');
+  if (parts.length < 2) return label;
+  var kept = parts.filter(function(seg){ return !PKG_MEAL_SEGMENT_RE.test(seg); });
+  if (!kept.length || kept.length === parts.length) return label;
+  return kept.map(function(seg){ return seg.trim(); }).filter(Boolean).join(' / ');
+}
+function getPackageDisplayLabel(p, pkgData) {
+  if (!p || !p.package) return '';
+  var base = (pkgData && pkgData.short_code) ? pkgData.short_code : p.package;
+  var mealRemoved = pkgData && pkgData.meal_included === 'Ja' && p.meal_plus !== 'Ja';
+  if (!mealRemoved) return base;
+  if (pkgData.short_code_no_meal) return pkgData.short_code_no_meal;
+  return stripMealFromPackageLabel(base);
+}
+
 function formatPackageMealsDisplay(p) {
   var dayLabel = {mo:'Mo',di:'Di',mi:'Mi',do:'Do',fr:'Fr',sa:'Sa',so:'So'};
   var defs = [
@@ -7828,7 +7851,7 @@ async function loadPackages() {
         <input type="number" value="${p.sort_order||0}" style="width:60px;font-size:12px;padding:4px 6px" onchange="setPackageOrder('${p.id}', this.value)" title="Reihenfolge – kleinere Zahl erscheint weiter oben" />
       </td>
       <td><span class="badge">${p.code}</span></td>
-      <td>${p.short_code||'–'}</td>
+      <td>${p.short_code||'–'}${p.short_code_no_meal ? '<div style="font-size:10px;color:var(--text3)" title="Kürzel ohne Meal">ohne Meal: ' + p.short_code_no_meal + '</div>' : ''}</td>
       <td>${p.category||'–'}</td><td>${p.nights||'–'}</td>
       <td>${p.room_type||'–'}</td><td style="font-size:11px;line-height:1.6">${formatPackageMealsDisplay(p)}</td>
       <td style="text-align:center">${p.meal_included==='Ja'?'<span style="color:var(--green);font-size:16px">✓</span>':'<span style="color:var(--text3)">–</span>'}</td>
@@ -7877,6 +7900,7 @@ async function saveAsTemplate(packageId) {
     pkg_lunch_days: p.pkg_lunch_days, pkg_dinner_days: p.pkg_dinner_days,
     transport: p.transport, meal_included: p.meal_included, entry_included: p.entry_included, price: p.price
   };
+  if (p.short_code_no_meal) row.short_code_no_meal = p.short_code_no_meal;
   var r = await db.from('package_templates').insert(row);
   if (r.error) { toast('⚠️ Fehler: ' + r.error.message); return; }
   toast('✅ "' + p.code + '" als Vorlage gespeichert');
@@ -7918,6 +7942,7 @@ async function loadTemplateIntoEvent(templateId) {
     pkg_lunch_days: t.pkg_lunch_days, pkg_dinner_days: t.pkg_dinner_days,
     transport: t.transport, meal_included: t.meal_included, entry_included: t.entry_included, price: t.price
   };
+  if (t.short_code_no_meal) row.short_code_no_meal = t.short_code_no_meal;
   var r = await db.from('packages').insert(row);
   if (r.error) { toast('⚠️ Fehler: ' + r.error.message); return; }
   toast('✅ "' + t.code + '" in dieses Event geladen');
@@ -7967,6 +7992,7 @@ function openPackageModal(pkg) {
   document.getElementById('pkgEditId').value = pkg ? pkg.id : '';
   ['Code','Category','Nights','Meals','Price'].forEach(f => document.getElementById('pkg'+f).value = pkg ? (pkg[f.toLowerCase()]||'') : '');
   document.getElementById('pkgShortCode').value = pkg ? (pkg.short_code||'') : '';
+  var _scnm = document.getElementById('pkgShortCodeNoMeal'); if (_scnm) _scnm.value = pkg ? (pkg.short_code_no_meal||'') : '';
   // Show current meal package price (S) and entry fee
   const mealPkg = packagesData.find(p => p.code === 'S');
   const mealPriceEl = document.getElementById('pkgMealPrice');
@@ -8045,13 +8071,24 @@ async function savePackage() {
     meal_included: document.getElementById('pkgMealIncluded').checked ? 'Ja' : 'Nein',
     entry_included: document.getElementById('pkgEntry') ? document.getElementById('pkgEntry').value : 'Ja', price
   };
+  var _scnmEl = document.getElementById('pkgShortCodeNoMeal');
+  var _scnmVal = _scnmEl ? _scnmEl.value.trim() : '';
+  // Nur mitsenden, wenn gesetzt oder das Package die Spalte schon kennt — so funktioniert
+  // das Speichern auch, falls die Migration (short_code_no_meal) noch nicht gelaufen ist.
+  var _pkgExisting = id ? packagesData.find(function(x){ return x.id === id; }) : null;
+  if (_scnmVal || (_pkgExisting && Object.prototype.hasOwnProperty.call(_pkgExisting, 'short_code_no_meal'))) {
+    row.short_code_no_meal = _scnmVal || null;
+  }
   let error;
   if (id) { ({ error } = await db.from('packages').update(row).eq('id', id)); }
   else {
     var maxOrder = packagesData.reduce(function(max, p) { return Math.max(max, p.sort_order || 0); }, 0);
     ({ error } = await db.from('packages').insert(Object.assign({event_id: currentEventId || null, sort_order: maxOrder + 1}, row)));
   }
-  if (error) { toast('Fehler: ' + error.message); return; }
+  if (error) {
+    if (/short_code_no_meal/.test(error.message || '')) { toast('⚠️ Spalte „short_code_no_meal“ fehlt – bitte SQL-Migration ausführen'); return; }
+    toast('Fehler: ' + error.message); return;
+  }
   closeModal('packageModal'); toast('Package gespeichert'); loadPackages();
 }
 
@@ -14998,7 +15035,7 @@ async function generateEventpass(participantId) {
 
   // Load package category from packagesData
   var pkgData = packagesData && packagesData.find(function(pd){ return pd.code === p.package; });
-  var pkgDisplayCode = pkgData && pkgData.short_code ? pkgData.short_code : p.package;
+  var pkgDisplayCode = getPackageDisplayLabel(p, pkgData);
   var pkgInfo = p.package ? pkgDisplayCode : '–';
 
   // Meal dots
@@ -19810,7 +19847,7 @@ function buildPassCardFragment(p, photoSrc, evName, evDates, evLocation, logoHtm
   var roleColors = {Player:'#185FA5',Coach:'#2E7D32',Parent:'#6a6a9e',Referee:'#c87a00',Official:'#7b3fa0','ESF Official':'#1a7a4a'};
   var roleColor = roleColors[p.role] || '#185FA5';
   var pkgData = packagesData && packagesData.find(function(pd){ return pd.code === p.package; });
-  var pkgDisplayCode = pkgData && pkgData.short_code ? pkgData.short_code : p.package;
+  var pkgDisplayCode = getPackageDisplayLabel(p, pkgData);
   var pkgInfo = p.package ? pkgDisplayCode : '–';
 
   var PASS_MEAL_DAYS = [{day:'Monday',short:'MON',code:'mo'},{day:'Tuesday',short:'TUE',code:'di'},{day:'Wednesday',short:'WED',code:'mi'},{day:'Thursday',short:'THU',code:'do'},{day:'Friday',short:'FRI',code:'fr'},{day:'Saturday',short:'SAT',code:'sa'},{day:'Sunday',short:'SUN',code:'so'}];
